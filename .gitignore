@@ -20,3 +20,6 @@ junit.xml
 #   bench/results.json  - the published artifact and the baseline for the next run
 #   fixtures/*.ttir     - the canon
 #   fixtures/raw/*.ttir - fixture provenance, absolute paths and all
+
+.claude/
+.freebuff/
