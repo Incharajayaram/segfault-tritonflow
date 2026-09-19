@@ -122,7 +122,7 @@ AXIS_ATTR = "axis"
 # instruction sets. They are *not* the coarse `kind: memory|compute` axis of the
 # schema document: "is this a MAC or an epilogue" is an α-attribute question, and
 # a selector that enumerated both for a dot would be answering a different
-# question. The stand-in selector in `qc/standin.py` uses these same three names,
+# question. A stand-in selector uses these same three names,
 # which is what lets the real recogniser be dropped into the emitter checks
 # without touching them.
 # --------------------------------------------------------------------------- #
@@ -212,7 +212,7 @@ def input_precision(op: Operation) -> str:
     """`tt.dot`'s input precision, defaulting to `ieee` when unstated.
 
     `ieee` is the honest default: `tf32` is a *reduced* precision, and assuming
-    it would make the emulator's tolerance right for the wrong reason (T-6).
+    it would make the emulator's tolerance right for the wrong reason.
     """
     text = op.attr.get(INPUT_PRECISION_ATTR)
     return text if text in INPUT_PRECISIONS else "ieee"

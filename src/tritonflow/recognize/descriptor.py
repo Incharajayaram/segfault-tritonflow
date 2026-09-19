@@ -1,7 +1,7 @@
 """Structured-access descriptors: `ttir` operand → `AccessDescriptor`.
 
-`contracts/access-descriptor.md` is the normative spec; this module is its
-implementation. Four things it does that v1's `{base, stride, shape}` did not:
+This module resolves `ttir` memory operands into structured access
+descriptors. Four things it does that v1's `{base, stride, shape}` did not:
 
 1. **Loop-carried operands are resolved, not skipped.** Tier 1's `tt.load`
    operands *are* `scf.for` iter_args, so the pointer is defined nowhere in the
@@ -15,7 +15,7 @@ implementation. Four things it does that v1's `{base, stride, shape}` did not:
    `loop_carried`/`increment` are the wrong-answer guard.
 3. **The result is a union, and it is total.** `Ok` | `Unstructured` |
    `BudgetExhausted`, one of the three for every operand, never an exception
-   (FR-008).
+.
 4. **Refusal is by name.** An operation the walk cannot fold produces
    `Unstructured("non-affine index: <op>")`. A dropped term would be a *wrong
    address with no marker on it*, which is the failure class this whole file is
@@ -94,14 +94,16 @@ class AffineSpec:
     when the coefficient is folded away.
 
     `wrap[k]` is the wraparound boundary of dimension `k`: `None` means no wrap,
-    an integer means the index was taken modulo that value. This is the field
-    `data-model.md` §3 calls `shape`.
+    an integer means the index was taken modulo that value. This is what
+    `AccessDescriptor` calls `shape`.
     """
 
     sizes: tuple[int | None, ...] = ()
     coeffs: tuple[SymExpr | None, ...] = ()
     offset: SymExpr = field(default_factory=lambda: SymExpr.const(0))
     wrap: tuple[int | None, ...] = ()
+    is_gather_scatter: bool = False
+    indices_name: str | None = None
 
     @property
     def rank(self) -> int:
@@ -143,7 +145,7 @@ def _align(index: int, source_rank: int, target_rank: int) -> int | None:
     """Map a dimension of a `source_rank`-sized shape into a `target_rank` frame.
 
     Trailing alignment, which is the convention every broadcast in this pipeline
-    follows (`data-model.md` §1.1's 2-D tiles align on the last dimension). A
+    follows (2-D tiles align on the last dimension). A
     source dimension that falls off the front of the target has no counterpart
     and maps to `None`.
     """
@@ -228,7 +230,7 @@ def _merge_wrap(
 
 @dataclass(frozen=True)
 class AccessDescriptor:
-    """`data-model.md` §3, field for field. Field types are `int | SymExpr`."""
+    """A structured memory access, field for field. Field types are `int | SymExpr`."""
 
     base: str
     sizes: tuple[int | SymExpr, ...]
@@ -240,13 +242,17 @@ class AccessDescriptor:
     loop_carried: bool
     increment: int | SymExpr | None
     provenance: tuple[str, ...] = ()
+    is_gather_scatter: bool = False
+    indices_name: str | None = None
 
     def descriptor_key(self) -> str:
-        """The canonical text key. Stable across processes and runs (FR-004)."""
+        """The canonical text key. Stable across processes and runs."""
+        gather_part = f";is_gather={self.is_gather_scatter};indices={self.indices_name}" if self.is_gather_scatter else ""
         return (
             f"base={self.base};sizes={_fmt_seq(self.sizes)};strides={_fmt_seq(self.strides)};"
             f"offsets={_fmt_seq(self.offsets)};shape={_fmt_seq(self.shape)};order={list(self.order)};"
             f"dtype={self.dtype};loop_carried={self.loop_carried};increment={_fmt_value(self.increment)}"
+            f"{gather_part}"
         )
 
     @property
@@ -303,7 +309,7 @@ class Unstructured:
 
 @dataclass(frozen=True)
 class BudgetExhausted:
-    """The hop budget ran out. A result, not a crash (`contracts/`, postcondition 6)."""
+    """The hop budget ran out. A result, not a crash."""
 
     hops: int
     limit: int
@@ -424,6 +430,8 @@ def _describe(
         loop_carried=recurrence is not None,
         increment=increment,
         provenance=tuple(walker.provenance),
+        is_gather_scatter=spec.is_gather_scatter,
+        indices_name=spec.indices_name,
     )
 
 
@@ -441,7 +449,7 @@ def _offsets_of(spec: AffineSpec, rank: int) -> tuple[SymExpr, ...]:
     `offsets[0]` is the whole offset expression (the constant part of the walk),
     because a per-dimension split of a sum of symbol products is not recoverable
     in general and inventing one would be a guess. The remaining entries are
-    zero. `data-model.md` §3 asks for "per-dimension start offset"; on this
+    zero. `AccessDescriptor.offsets` is the per-dimension start offset; on this
     corpus the offset is always carried in dimension 0 (`pid_m·BM·sam` is a row
     offset), which is what the field records.
     """
@@ -472,12 +480,31 @@ def _walk_pointer_chain(
         walker.visit(op)
         if op.name == ADDPTR:
             index_operand = shapes.index_operand(op)
-            if index_operand is not None:
-                part = _analyze_index(index_operand, graph, walker)
-                index = part if index is None else index.plus(part)
             base = shapes.base_operand(op)
             if base is None:
                 raise _Refuse(f"non-affine pointer: {op.name} has no base operand")
+            if index_operand is not None:
+                try:
+                    part = _analyze_index(index_operand, graph, walker)
+                    index = part if index is None else index.plus(part)
+                except _Refuse as ref:
+                    if 'modulo' in str(ref):
+                        raise
+                    # Non-affine / indirect index: bifurcate into explicit gather/scatter descriptor!
+                    base_cur = base
+                    while base_cur and base_cur.def_op and base_cur.def_op.name == ADDPTR:
+                        base_cur = shapes.base_operand(base_cur.def_op)
+                    origin_name = base_cur.name if base_cur else "unknown"
+                    if base_cur and base_cur.def_op and base_cur.def_op.name == SPLAT:
+                        if base_cur.def_op.operands:
+                            origin_name = base_cur.def_op.operands[0].name
+                    idx_shape = shapes.shape_of(index_operand.type) or (32,)
+                    gather_spec = AffineSpec(
+                        sizes=tuple(idx_shape),
+                        is_gather_scatter=True,
+                        indices_name=index_operand.name,
+                    )
+                    return origin_name, gather_spec, main_type(base_cur or current, current)
             current = base
             continue
         if op.name == SPLAT:
@@ -679,7 +706,7 @@ def _remsi_spec(
 ) -> AffineSpec:
     """`arith.remsi` — a wraparound boundary, or a refusal.
 
-    A *decidable* divisor is the wraparound boundary `data-model.md` §3 calls
+    A *decidable* divisor is the wraparound boundary `AccessDescriptor` calls
     `shape`: the access re-enters at 0 every `k` elements. A *symbolic* divisor
     is refused by name, because "wraps at an unknown boundary" is not an access
     the selector can cost and pretending otherwise is how Tier 3 would come back
@@ -844,7 +871,7 @@ class ConformanceReport:
     """`conformance_check`'s output: agreements, refusals, and every disagreement.
 
     `oracle` is a callable, never an import: `tts.make_tptr` lives in Triton, and
-    FR-034 says the pipeline has no Triton dependency. The oracle is therefore
+    the pipeline has no Triton dependency. The oracle is therefore
     supplied by the caller (the check file ships one derived from the kernel
     text), and this module only compares.
     """
@@ -945,8 +972,8 @@ def _sequence_form(value: object) -> object:
 def canonicalize(module: Module) -> Module:
     """Re-exported from `canon.canonicalize` so `recognize` has one entry point.
 
-    The recogniser does not canonicalise on its own: `data-model.md` §3 lists
-    `canonicalize` under this module's interface, and the implementation lives in
+    The recogniser does not canonicalise on its own: `canonicalize` is listed
+    under this module's interface, and the implementation lives in
     `canon/` because it is a whole-module pass rather than an operand walk.
     """
     from ..canon.canonicalize import canonicalize as _canonicalize

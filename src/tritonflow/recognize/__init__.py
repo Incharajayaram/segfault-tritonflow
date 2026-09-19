@@ -1,7 +1,7 @@
 """recognize: structure is recognised, not reconstructed.
 
 Turns the def-use graph into `AccessDescriptor`s with a bounded, budgeted walk,
-and reports `Unstructured` rather than guessing (FR-007, FR-008).
+and reports `Unstructured` rather than guessing.
 
 The three modules and what belongs in each:
 
@@ -11,9 +11,9 @@ The three modules and what belongs in each:
 | `walk.py` | `SymExpr`, `BoundedWalker`, `MAX_HOPS`, recurrence substitution | the budget and the algebra, shared by every fold |
 | `descriptor.py` | `AccessDescriptor`, `describe`, the result union, conformance | the decision and its evidence |
 
-`resolve_operand` is re-exported here because `contracts/access-descriptor.md`
-names it as this package's entry point (the implementation lives in
-`descriptor.py`, where the result union it returns is defined).
+`resolve_operand` is re-exported here as this package's entry point (the
+implementation lives in `descriptor.py`, where the result union it returns is
+defined).
 """
 
 from . import op_shapes

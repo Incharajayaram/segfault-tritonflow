@@ -5,10 +5,10 @@ pointer back to its base* and splitting them would mean three functions that eac
 half-understand the other two:
 
 1. :class:`SymExpr` — a small closed algebra for `int | SymExpr`. The descriptor's
-   `sizes`/`strides`/`offsets`/`increment` are `int | SymExpr` by
-   `data-model.md` §3, and *whether a field is an `int`* is load-bearing: an
+   `sizes`/`strides`/`offsets`/`increment` are `int | SymExpr`,
+   and *whether a field is an `int`* is load-bearing: an
    integer stride is a fact the schema's predicate language can decide, and a
-   symbolic one is a fact it must answer `unknown` to (fail-closed, FR-017).
+   symbolic one is a fact it must answer `unknown` to (fail-closed).
 
 2. :class:`BoundedWalker` — the hop budget. `MAX_HOPS` is a named constant and
    exhausting it is a *result*, not a recursion limit reached at the wrong
@@ -39,7 +39,7 @@ from ..ttir.graph import LoopInfo, iter_loops
 from ..ttir.ssa import Module, Operation, SsaValue
 from .op_shapes import ADDPTR, CONSTANT
 
-#: The hop budget of `contracts/access-descriptor.md`. Named here, exported from
+#: The hop budget for the bounded walk. Named here, exported from
 #: `recognize`, and never written as a literal at a call site.
 MAX_HOPS = 32
 
@@ -65,7 +65,7 @@ class SymExpr:
     Normalised on construction — terms sorted, equal symbol products merged, a
     zero scale dropped — so that `SymExpr(sym("a")) + SymExpr(sym("a"))` is
     *equal* to `SymExpr.const(2) * SymExpr.sym("a")`. Equality is what makes the
-    descriptor's determinism assertion (FR-004) meaningful: two runs that fold in
+    descriptor's determinism assertion meaningful: two runs that fold in
     a different order must produce the same descriptor, not merely the same
     address.
     """
@@ -152,7 +152,7 @@ class SymExpr:
     # -- presentation -------------------------------------------------------
 
     def to_public(self) -> int | SymExpr:
-        """`int` when constant, else `self` — the `int | SymExpr` of §3.
+        """`int` when constant, else `self` — the `int | SymExpr` a descriptor field holds.
 
         The conversion happens at exactly one place so that "is this field an
         `int`?" is decided by the value, not by which code path built it.
@@ -207,8 +207,8 @@ class BudgetReached(Exception):
     """Internal control flow for the hop budget.
 
     Private, and converted to `BudgetExhausted` by `describe` before it can
-    escape: `contracts/access-descriptor.md` postcondition 6 says exhausting the
-    budget is a *result*, never a crash. Raising internally and catching at one
+    escape: exhausting the budget is a *result*, never a crash. Raising
+    internally and catching at one
     boundary is how the recursion stays readable without the budget being a
     value that every recursive call has to thread through and check.
     """
