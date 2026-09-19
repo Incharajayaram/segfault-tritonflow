@@ -1,11 +1,11 @@
 """Tokenizer for the textual Triton IR dump (`ttir`).
 
-Track A's lowest layer. Three properties matter more than speed:
+The lexer is the parser's lowest layer. Three properties matter more than speed:
 
 * **Total.** `tokenize` returns for any string. Bad input becomes an `ERROR`
   token, never an exception (contract `raw-module.md`, postcondition 1).
 * **Deterministic.** Same bytes -> same token list, every process. No dict or
-  set iteration, no locale, no regex backtracking (`FR-004`).
+ set iteration, no locale, no regex backtracking (``).
 * **Text-preserving.** Every token records `offset`/`end_offset` into the
   *original* string, so the parser can slice type text and attribute values out
   verbatim instead of re-printing them. Re-printing is how a second dialect
@@ -38,7 +38,7 @@ EOF = "eof"
 # `?` is a real part of the dialect, not junk: `tensor<?x64xf32>` is a dynamic
 # shape. Leaving it out of the punctuation set made it a lexical error, which
 # would have blamed bad *type text* on the syntax layer — the one thing the
-# contract's failure-route table forbids (that case belongs to Track B).
+# contract's failure-route table forbids (that case belongs to the def-use graph layer).
 _PUNCT = set("=,:{}()<>[]*!^?")
 _WHITESPACE = " \t\f\v"
 _DIGITS = set("0123456789")
@@ -132,7 +132,7 @@ def tokenize(text: str) -> list[Token]:
 
     text = strip_comments(text)
     if text.startswith("\ufeff"):
-        # EC-020: a UTF-8 BOM is tolerated, not treated as a token. Replaced by
+ #: a UTF-8 BOM is tolerated, not treated as a token. Replaced by
         # a space so every offset in the file stays valid.
         text = " " + text[1:]
 
@@ -323,7 +323,7 @@ def tokenize(text: str) -> list[Token]:
 def string_value(token: Token) -> str:
     """The contents of a `STRING` token, with `\\"` and `\\\\` unescaped.
 
-    EC-009: a loc name containing an escaped quote must not terminate the
+    A loc name containing an escaped quote must not terminate the
     string early, and the recovered name is the *value*, not the quoted text.
     """
     if token.kind != STRING or len(token.text) < 2:

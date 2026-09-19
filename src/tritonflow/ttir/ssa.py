@@ -1,20 +1,20 @@
-"""The parsed IR model — `data-model.md` §2, and the semantic half of the seam.
+"""The parsed IR model — the semantic half of the parser/IR seam.
 
-`RawModule` (Track A) carries text: SSA names as written, types as strings,
+`RawModule` (the syntax layer) carries text: SSA names as written, types as strings,
 attributes as strings, no terminator special-casing. `Module` carries
 *semantics*: every operand is a resolved :class:`SsaValue`, every value has
 exactly one defining operation, every type is parsed, every `loc` reference is
 bound against the module's table.
 
-The invariants from `data-model.md` §2, and where each is enforced:
+The invariants of the semantic model, and where each is enforced:
 
 | Invariant | Enforced by |
 |---|---|
-| every `SsaValue` has exactly one defining `Operation` | `to_ir.build_ir` (EC-026) |
+| every `SsaValue` has exactly one defining `Operation` | `to_ir.build_ir` |
 | every operand reference resolves, or is a function argument | `to_ir.build_ir` |
 | `def_op` is `None` for a block argument | construction here |
-| `results` is a list — a multi-result op binds all of them (FR-002) | `to_ir.bind_results` |
-| regions are never flattened (FR-019) | construction here + `graph.walk_region` |
+| `results` is a list — a multi-result op binds all of them | `to_ir.bind_results` |
+| regions are never flattened | construction here + `graph.walk_region` |
 
 **Two representation choices worth stating, because both are visible from
 outside.**
@@ -23,14 +23,14 @@ outside.**
 `Module → Region → Block → Operation → Region` is a cycle. Two consequences
 were handled rather than discovered later: `parent` is `compare=False,
 repr=False`, so `repr` and `==` over a module terminate and stay deterministic
-(FR-004 depends on this), and it is filled in *after* construction with
+(the round-trip test depends on this), and it is filled in *after* construction with
 `object.__setattr__` — the one sanctioned escape hatch for a back-reference in
 an otherwise immutable tree. Nothing else in these dataclasses is mutable.
 
 *Operand tokens.* `scf.for`'s operands are `%c0_i32, %1, %c1_i32, …` but
 `tt.get_program_id`'s operand is `x` and `arith.cmpi`'s first operand is `slt` —
 op spelling, not values. `Operation.operands` holds only resolved
-:SsaValue:`s` (as §2 requires), and :attr:`Operation.tokens` keeps the operand
+:SsaValue:`s`, and :attr:`Operation.tokens` keeps the operand
 list exactly as written so the `x` and the `slt` are not silently dropped:
 `operands` is `tokens` filtered to the entries that name a value, in order. That
 positional relationship is asserted by a test, because it is the kind of thing
@@ -82,7 +82,7 @@ class SsaValue:
     index: int = 0
     """Slot within the defining operation's results. `0` for a block argument.
 
-    Together with :attr:`arity` this is what makes EC-005 decidable: a
+ Together with:attr:`arity` this is what makes decidable: a
     multi-result value is referenced as `%acc_25#2`, and the *bare* `%acc_25`
     is only ever the first slot.
     """
@@ -90,8 +90,8 @@ class SsaValue:
     arity: int = 1
     """Number of results of the defining operation (`1` for a block argument).
 
-    A use of a value with `arity > 1` and `index == 0` is the arity mismatch
-    EC-005 forbids — the printed base name is not a name for all three results.
+    A use of a value with `arity > 1` and `index == 0` is an arity mismatch:
+    the printed base name is not a name for all three results.
     """
 
     type_is_inferred: bool = False
@@ -145,7 +145,7 @@ class Region:
 
 @dataclass(frozen=True)
 class Operation:
-    """A resolved operation. `results` is a list, not a value (FR-002)."""
+    """A resolved operation. `results` is a list, not a value."""
 
     name: str
     operands: tuple[SsaValue, ...] = ()
@@ -260,7 +260,7 @@ class Module:
 
 @dataclass(frozen=True)
 class ParseResult:
-    """Exactly one of the two halves is set (`contracts/ttir-parser.md`)."""
+    """Exactly one of the two halves is set."""
 
     module: Module | None = None
     diagnostic: ParseDiagnostic | None = None

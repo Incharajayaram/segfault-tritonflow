@@ -1,23 +1,23 @@
-"""The instruction stream: `data-model.md` §5 as executable structures.
+"""The instruction stream as executable structures.
 
-This is the type that crosses the pipeline's last real boundary — Track C's
-recogniser decides, Track D's emulator and the PyTorch seam consume — so it is
+This is the type that crosses the pipeline's last real boundary — the
+recognizer decides, the emulator and the PyTorch seam consume — so it is
 frozen first and edited only by its owner.
 
 **One representation rule, stated once, because it is visible everywhere: the
 program model is *name-based*.** `source_ops` holds `SourceRef`s, not
 `Operation`s; `iter_args`/`results`/`defs`/`inputs` hold SSA names, not
-`SsaValue`s. §5 writes `list[Operation]` and `list[SsaValue]`, and both are
+`SsaValue`s. Using `list[Operation]` and `list[SsaValue]` directly would be
 unserialisable: `Operation` carries dicts and regions, and `Operation`/
 `SsaValue` are not hashable, so a program built from them could neither
-round-trip through text (contract postcondition 3) nor be compared. A
-`SourceRef` carries the same identity an emulator or a coverage report needs —
-op name, position, `loc` name — in a form that survives `serialize`. The
-deviation is this one sentence wide, and it is what makes the round-trip
-assertion mean something rather than compare two references to the same object.
+round-trip through text nor be compared. A `SourceRef` carries the same
+identity an emulator or a coverage report needs — op name, position, `loc`
+name — in a form that survives `serialize`. The deviation is this one sentence
+wide, and it is what makes the round-trip assertion mean something rather than
+compare two references to the same object.
 
-**What is enforced here, rather than trusted.** §5's placement invariant (FR-019)
-says an `Instr` whose source lies in a region is emitted *in* that region's
+**What is enforced here, rather than trusted.** The placement invariant says
+an `Instr` whose source lies in a region is emitted *in* that region's
 `Loop`, and `scf.yield` becomes `iter_args` re-threading rather than an
 instruction. A data structure cannot enforce that by itself, so `Program`
 validates on construction: unique loop ids, every instruction and marker placed
@@ -26,14 +26,14 @@ one yielded value per `iter_args` entry, `total_cost` equal to the sum of the
 selected instructions' costs, and **no operand that nothing defines**. That last
 one is the machine-checkable half of Principle II: a value we cannot produce is
 a refusal, never a zero, and never a guess. `Program.inputs` exists to make it
-decidable — §5 does not list it, and without a declared entry set "came from
-outside the kernel" and "dangles" are the same string.
+decidable, so that without a declared entry set "came from outside the kernel"
+and "dangles" are the same string.
 
 `Instr.cost` is *recorded*, and `Program.total_cost` is `math.fsum` of the
-recorded costs, so a consumer needs no schema to interpret a serialised program
-(postcondition 5). `fsum` rather than `sum` because the sum is compared for
-equality across processes (FR-004) and left-to-right float addition is the kind
-of order dependence that shows up as a one-ulp diff on someone else's machine.
+recorded costs, so a consumer needs no schema to interpret a serialised
+program. `fsum` rather than `sum` because the sum is compared for equality
+across processes and left-to-right float addition is the kind of order
+dependence that shows up as a one-ulp diff on someone else's machine.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ from ..ttir.ssa import Operation, Region
 #: A loop's identity inside one program: small, dense, assigned in source order.
 LoopId = int
 
-#: `data-model.md` §5's two marker kinds. A syntax-layer refusal reaches the
+#: The program's two marker kinds. A syntax-layer refusal reaches the
 #: program as a marker too — it is still a *reason*, not a dropped operation.
 UNSUPPORTED = "UNSUPPORTED"
 PARSE_UNSUPPORTED = "PARSE_UNSUPPORTED"
@@ -120,7 +120,7 @@ class SsaRef:
 class Imm:
     """A literal. `int` and `float` are distinguished on purpose: an address
     advance of `32` and a tolerance of `32.0` are not the same value, and the
-    serialised form has to keep the difference (EC-082)."""
+    serialised form has to keep the difference."""
 
     value: int | float
 
@@ -136,13 +136,13 @@ class Imm:
 class MemRef:
     """A memory reference: a space, a base, and the addressing decision.
 
-    `access` is Track C's `AccessDescriptor`, kept **opaque** — this module does
-    not import `recognize`, so the recogniser can change its descriptor without
-    emitting a new revision of the program format. What is compared and
-    serialised is `access_key`, the descriptor's canonical text key
-    (`recognize.descriptor.descriptor_key`, plan §4). §5 writes `access:
-    AccessDescriptor`; storing the key instead is what lets postcondition 3 hold
-    for addressing, because a descriptor object has no textual inverse.
+    `access` is the recognizer's `AccessDescriptor`, kept **opaque** — this
+    module does not import `recognize`, so the recogniser can change its
+    descriptor without emitting a new revision of the program format. What is
+    compared and serialised is `access_key`, the descriptor's canonical text
+    key (`recognize.descriptor.descriptor_key`). Storing the key rather than
+    the descriptor object is what lets the round-trip hold for addressing,
+    because a descriptor object has no textual inverse.
     """
 
     space: str
@@ -160,7 +160,7 @@ class MemRef:
         """Build from a descriptor when one is available.
 
         Key extraction prefers a `descriptor_key()` method, falls back to
-        `str(access)`. Documented rather than clever: when Track C's
+        `str(access)`. Documented rather than clever: when the recognizer's
         `descriptor_key` lands, `MemRef.of` is the one place to point at it.
         """
         return cls(space=space, base=base, access_key=_access_key(access), access=access)
@@ -179,7 +179,7 @@ def _access_key(access: object | None) -> str | None:
     return str(access)
 
 
-#: `data-model.md` §5: `Operand = SsaRef(name) | Imm(int | float) | MemRef(...)`.
+#: `Operand = SsaRef(name) | Imm(int | float) | MemRef(...)`.
 Operand = SsaRef | Imm | MemRef
 
 
@@ -214,10 +214,9 @@ class Binding:
     roles — and *optionally* a chosen `instruction` for callers that have
     already selected (hand-built inputs, or a recogniser that had to decide for
     itself). When `instruction` is `None`, assembly selects it from the schema via
-    `isa/select.py` — the method of record's §Backend assembly: "§assembly selects
-    the minimum-cost variant consistent with the verified α attributes", which is
-    also why `contracts/selector.md` lists the *emitter* as the selector's
-    consumer rather than the recogniser.
+    `isa/select.py`, which selects the minimum-cost variant consistent with the
+    verified attributes — the emitter is the selector's consumer, not the
+    recogniser.
     """
 
     instruction: str | None = None
@@ -242,7 +241,7 @@ class Binding:
     check: a value an instruction materialises is defined by it."""
 
     descriptor: object | None = field(default=None, compare=False, repr=False)
-    """The memory operand a constraint is checked against (Track C's type)."""
+    """The memory operand a constraint is checked against (the recognizer's type)."""
 
     tile: tuple[int, int, int] | None = None
     """`(m, n, k)` when the decision carries a tile shape."""
@@ -260,10 +259,10 @@ class Binding:
 
 @dataclass(frozen=True)
 class UnsupportedMarker:
-    """An operation we chose not to, or could not, lower (FR-005).
+    """An operation we chose not to, or could not, lower.
 
     First-class and placed exactly like an instruction: inside the `Loop` it
-    came from when it came from one (EC-077), in `Program.unsupported`
+    came from when it came from one, in `Program.unsupported`
     otherwise. It carries the originating `loc` name, because the whole point
     is that a reader can find the kernel line we gave up on.
     """
@@ -315,9 +314,9 @@ class Instr:
 
     `constraint` and `constrained_on` are the text of the instruction's own
     constraint and the key of the operand it was chosen for. They exist because
-    `check_constraint(instr, operand)` (plan §7) has to re-validate
-    independently — and it cannot do that from the schema alone, or it would
-    be trusting the same lookup the selector used.
+    `check_constraint(instr, operand)` has to re-validate independently — and
+    it cannot do that from the schema alone, or it would be trusting the same
+    lookup the selector used.
     """
 
     name: str
@@ -328,6 +327,14 @@ class Instr:
     defs: tuple[str, ...] = ()
     constraint: str | None = None
     constrained_on: str | None = None
+    cost_result: object | None = None
+    select_cost: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.select_cost == 0.0 and self.cost != 0.0:
+            object.__setattr__(self, "select_cost", self.cost)
+        elif self.cost == 0.0 and self.select_cost != 0.0:
+            object.__setattr__(self, "cost", self.select_cost)
 
     @property
     def roles(self) -> tuple[str, ...]:
@@ -359,7 +366,7 @@ class AsyncOp:
 
 @dataclass(frozen=True)
 class Loop:
-    """A recovered `scf.for`, with the values it threads (EC-074, EC-075).
+    """A recovered `scf.for`, with the values it threads.
 
     `iter_args` are the block arguments the loop carries; `results` are the
     values `scf.yield` re-threads out of it, one per iter_arg. `scf.yield`
@@ -428,11 +435,45 @@ class Program:
     total_cost: float = 0.0
     inputs: tuple[str, ...] = ()
     async_ops: tuple[AsyncOp, ...] = ()
+    total_time_cycles: float | None = None
+    resources: object | None = None
 
     def __post_init__(self) -> None:
         validate_program(self)
 
     # -- derived views ------------------------------------------------------ #
+
+    @property
+    def aggregate_resources(self) -> object:
+        from tritonflow.isa.cost import Resources
+        dram_b = scratch_b = tx = bc = mac = regs = 0
+        for i in self.instructions():
+            res = getattr(i, "cost_result", None)
+            if res is not None and getattr(res, "resources", None) is not None:
+                r = res.resources
+                dram_b += getattr(r, "dram_bytes", 0)
+                scratch_b += getattr(r, "scratch_bytes", 0)
+                tx += getattr(r, "transactions", 0)
+                bc += getattr(r, "bank_conflicts", 0)
+                mac += getattr(r, "mac_ops", 0)
+                regs += getattr(r, "registers", 0)
+        return Resources(
+            dram_bytes=dram_b,
+            scratch_bytes=scratch_b,
+            transactions=tx,
+            bank_conflicts=bc,
+            mac_ops=mac,
+            registers=regs,
+        )
+
+    @property
+    def aggregate_time_cycles(self) -> float:
+        total = 0.0
+        for i in self.instructions():
+            res = getattr(i, "cost_result", None)
+            if res is not None and getattr(res, "time", None) is not None:
+                total += getattr(res.time, "cycles", 0.0)
+        return total
 
     @property
     def cost_sum(self) -> float:
@@ -450,7 +491,7 @@ class Program:
         Derived from source position rather than stored, because a stored order
         is a second thing that can disagree with the first. Ties (hand-built
         sources with no line) keep construction order, so the result is total
-        and reproducible (FR-004).
+        and reproducible.
         """
         items: list[Loop | Instr] = [*self.loops, *self.instrs]
         return tuple(sorted(items, key=_source_position))
@@ -510,14 +551,14 @@ class OrderedOp:
 
     `region` is the point: a flat topological sort over the def-use graph loses
     which region an operation came from, and an operation inside `scf.for` that
-    has lost its region cannot be placed back inside the loop (T-4, D10).
+    has lost its region cannot be placed back inside the loop.
     `loop_id` is `None` for the kernel body and for anything not in a loop.
     `terminator` records that this operation ends its block — for a loop body
     that is `scf.yield`, which re-threads `iter_args` and is never an
-    instruction (EC-075). `nested` means the operation sits inside a nested
+    instruction. `nested` means the operation sits inside a nested
     `scf.for`, i.e. inside a loop that is itself inside a loop: the program
     format has no nested loop, so such an operation is marked `UNSUPPORTED`
-    rather than hoisted up into the enclosing loop (T-4).
+    rather than hoisted up into the enclosing loop.
     """
 
     op: Operation
@@ -540,9 +581,8 @@ class OrderedOp:
 class EmissionRecord:
     """One line of the selection evidence: what was decided, and where it went.
 
-    The fields after `cost` are `SelectionReport`'s (contracts/selector.md), not
-    invented here: FR-018 requires a rejected candidate to carry the predicate
-    that failed it, and SC-005 requires the gap against the oracle to be
+    The fields after `cost` are `SelectionReport`'s: a rejected candidate
+    carries the predicate that failed it, and the gap against the oracle is
     reported rather than hidden. `rejected` holds `name: reason` per rejected
     candidate, so the completeness report can show *why* the cheaper-looking
     instruction was not used.
@@ -587,9 +627,9 @@ def validate_program(program: Program) -> None:
     """Raise :class:`AssemblyError` unless `program` is internally consistent.
 
     Cheap enough to run on construction *and* again in `serialize`, which is
-    what makes contract failure-mode row 3 ("a dangling operand reference
-    raises `AssemblyError`") true of the serialiser as written rather than true
-    by accident of the constructor having run first.
+    what makes "a dangling operand reference raises `AssemblyError`" true of
+    the serialiser as written rather than true by accident of the constructor
+    having run first.
     """
     seen_loop_ids: set[int] = set()
     for loop in program.loops:
@@ -600,7 +640,7 @@ def validate_program(program: Program) -> None:
             raise AssemblyError(
                 f"loop {loop.id} yields {len(loop.results)} value(s) for "
                 f"{len(loop.iter_args)} iter_args; scf.yield must re-thread exactly "
-                "the values the loop carries (EC-074)"
+                "the values the loop carries"
             )
         if loop.inits and len(loop.inits) != len(loop.iter_args):
             raise AssemblyError(
@@ -611,13 +651,13 @@ def validate_program(program: Program) -> None:
             raise AssemblyError(
                 f"loop {loop.id} yields {len(loop.yields)} value(s) for "
                 f"{len(loop.iter_args)} iter_args; scf.yield must re-thread exactly "
-                "the values the loop carries (EC-074)"
+                "the values the loop carries"
             )
         for item in loop.body:
             if isinstance(item, Instr) and item.loop != loop.id:
                 raise AssemblyError(
                     f"{item.name} is emitted inside loop {loop.id} but records "
-                    f"loop={item.loop}; an instruction carries where it was placed (FR-019)"
+                    f"loop={item.loop}; an instruction carries where it was placed"
                 )
 
     placements: dict[tuple[str, int, int], str] = {}
@@ -626,7 +666,7 @@ def validate_program(program: Program) -> None:
             if where != "loop" and instr.loop is not None:
                 raise AssemblyError(
                     f"{instr.name} is placed in {where} but records loop={instr.loop}; "
-                    "an instruction at the top level belongs to no loop (FR-019)"
+                    "an instruction at the top level belongs to no loop"
                 )
             _record_placement(placements, instr.source, f"{where}:{instr.name}")
     for where, markers in _marker_placements(program).items():
@@ -707,18 +747,17 @@ def _record_placement(
 
 
 # --------------------------------------------------------------------------- #
-# Duck-typed seams to the tracks that are not landed
+# Duck-typed seam to the ISA schema module
 # --------------------------------------------------------------------------- #
 
 
 class InstructionLike(Protocol):
     """What `emit_instr` needs from a schema instruction.
 
-    A `Protocol`, not an import: `isa/schema.py` is Track D's and does not
-    exist yet, and §Discipline "every track testable without its upstream"
-    means the emitter must be exercisable against a hand-built schema today.
-    This is the smallest set of members that makes costing and constraint
-    re-checking possible.
+    A `Protocol`, not an import, so that a layer stays testable without its
+    upstream: the emitter must be exercisable against a hand-built schema
+    without depending on `isa/schema.py` directly. This is the smallest set
+    of members that makes costing and constraint re-checking possible.
     """
 
     name: str

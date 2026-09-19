@@ -1,17 +1,17 @@
-"""`ttir` text -> `RawModule`. Track A's parser, and the parser/IR seam.
+"""`ttir` text -> `RawModule`. The syntax layer's parser, and the parser/IR seam.
 
-This module implements `specs/001-triton-to-tritonflow/contracts/raw-module.md`
-(the producer half). It is **strictly syntactic**: types stay text, attribute
+This module produces the raw, un-typechecked module (the producer half of the
+parser/IR seam). It is **strictly syntactic**: types stay text, attribute
 values stay text, operands stay SSA names as written, and nothing here decides
-what a type means or whether a use is well-typed. Those are Track B's calls, and
-the reason the two tracks can work at the same time.
+what a type means or whether a use is well-typed. Those are `to_ir.py`'s calls, and
+the reason the two layers can work independently.
 
 `parse_raw` is **total**: for any string it returns a `RawModule`, never raises,
-never hangs. The only way it reports a problem is `diagnostics` (postcondition 1).
+never hangs. The only way it reports a problem is `diagnostics`.
 
 Text-level decisions this file makes, in one place
 --------------------------------------------------
-These are the places the contract's data model is not self-evident. Each one is
+These are the places the raw module's shape is not self-evident. Each one is
 structural, not semantic; none of them requires knowing what an op *means*.
 
 1. **`module { … }` is a container, not an operation.** `RawModule.ops` is the
@@ -27,8 +27,8 @@ structural, not semantic; none of them requires knowing what an op *means*.
 3. **Non-SSA operands are recorded verbatim.** `arith.constant dense<2>`,
    `arith.cmpi slt, …` and `tt.get_program_id x` put a literal or a keyword in
    operand position; the text is kept as written rather than dropped, since
-   dropping it would lose information Track B needs and inventing a field would
-   change the frozen seam.
+   dropping it would lose information the semantic layer (`to_ir.py`) needs and
+   inventing a field would change the frozen seam.
 4. **`key = value` in the operand clause is an attribute.** `tt.dot …,
    inputPrecision = tf32 : …` has no braces; it still lands in `attrs`, which is
    where the recogniser reads `input_precision` from.
@@ -40,25 +40,25 @@ structural, not semantic; none of them requires knowing what an op *means*.
    form (`[visibility] @symbol(params)`) is recognised structurally — a symbol
    token followed by a parenthesis — and its `sym_name`/`visibility` land in
    `attrs` under those two reserved keys. This is the only way the symbol name
-   can reach Track B without adding a field to the frozen dataclass.
+   can reach the semantic layer without adding a field to the frozen dataclass.
 7. **`loc` is carried, not resolved.** `loc(#loc25)` is recorded as
    `RawLoc(name="#loc25")`, i.e. the reference as written; the table entry
    `#loc25 = loc("rm"(#loc1))` is recorded as `RawLoc(name="rm")`. Resolving a
-   reference against the table is Track B's job (`loc` lookup is listed under
-   "semantic" in the contract, and a missing key is an invalid-IR error).
+   reference against the table is a semantic decision (`loc` lookup happens in
+   `to_ir.py`, and a missing key is an invalid-IR error), not a syntactic one.
    Forms with no simple name (`loc(unknown)`, `loc(callsite(…))`) keep their
    inner text verbatim rather than being coerced into a name.
 8. **The terminator is positional.** `RawBlock.terminator_index` is the index of
    the last operation, whatever it is: MLIR requires a terminator to be last, and
-   naming it would mean claiming that `scf.yield` is special — which the contract
-   explicitly assigns to Track B.
+   naming it would mean claiming that `scf.yield` is special — which is a
+   semantic judgement this module does not make.
 9. **One diagnostic, then stop.** A syntax failure makes the module unusable
-   (contract: "a non-empty `diagnostics` means the module is unusable"), so the
+   (a non-empty `diagnostics` means the module is unusable), so the
    parser stops at the first one instead of emitting a cascade of guesses. Every
    diagnostic carries a line and, where cheap, a column, and `layer="syntax"`.
 10. **Nesting is bounded.** Region nesting deeper than `MAX_REGION_DEPTH` is
-    reported as a diagnostic rather than recursing until `RecursionError`
-    (EC-027). The limit is far above anything the pinned printer emits.
+    reported as a diagnostic rather than recursing until `RecursionError`.
+    The limit is far above anything the pinned printer emits.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ from dataclasses import dataclass, replace
 from . import lexer as lx
 
 # --------------------------------------------------------------------------
-# Frozen seam. Field definitions only; `contracts/raw-module.md` is the spec.
+# Frozen seam. Field definitions only.
 # --------------------------------------------------------------------------
 
 
@@ -126,7 +126,7 @@ class RawBlock:
 
 @dataclass(frozen=True)
 class RawRegion:
-    """A `{ … }` region. Nested regions stay nested (FR-019)."""
+    """A `{ … }` region. Nested regions stay nested."""
 
     blocks: list[RawBlock]
 
@@ -263,8 +263,8 @@ class _Parser:
         except RecursionError:  # pragma: no cover - guarded by MAX_REGION_DEPTH
             self.fail("a shallower region nesting")
         except Exception as exc:
-            # Catching everything is the contract, not laziness: `parse_raw` is
-            # total (postcondition 1), so even a bug in here has to come out as a
+            # Catching everything is deliberate, not laziness: `parse_raw` is
+            # total, so even a bug in here has to come out as a
             # diagnostic rather than as a traceback in a teammate's pipeline. The
             # message says it was internal, so it is not mistaken for a verdict
             # on the input.
@@ -342,11 +342,12 @@ class _Parser:
         line, col = start.line, start.col
         results = self.parse_lhs()
         name_tok = self.peek()
-        if name_tok.kind not in (lx.OPNAME, lx.IDENT):
+        if name_tok.kind not in (lx.OPNAME, lx.IDENT, lx.STRING):
             self.fail("an operation name", tok=name_tok)
             return None
         self.i += 1
-        return self.parse_op_body(name_tok.text, results, line, col, depth)
+        name = name_tok.text.strip('"')
+        return self.parse_op_body(name, results, line, col, depth)
 
     @staticmethod
     def is_discard(t: lx.Token) -> bool:
@@ -441,6 +442,27 @@ class _Parser:
                 self.i += 1
                 attrs.update(self.parse_brace_dict())
                 continue
+            if t.kind == lx.PUNCT and t.text == "<" and self.peek(1).text == "{":
+                self.i += 1
+                attrs.update(self.parse_brace_dict())
+                if self.peek().kind == lx.PUNCT and self.peek().text == ">":
+                    self.i += 1
+                continue
+            if t.kind == lx.PUNCT and t.text == "(" and self.peek(1).text == "{":
+                self.i += 1
+                if depth + 1 > MAX_REGION_DEPTH:
+                    self.fail_region_too_deep(depth)
+                    break
+                first_args = (
+                    decl_args
+                    if decl_args is not None
+                    else self.loop_args(iv_name, iter_names, colon_types, result_types)
+                )
+                decl_args = None
+                regions.append(self.parse_region(depth + 1, first_args))
+                if self.peek().kind == lx.PUNCT and self.peek().text == ")":
+                    self.i += 1
+                continue
             if t.kind == lx.PUNCT and t.text == "{":
                 if self.looks_like_attr_dict():
                     attrs.update(self.parse_brace_dict())
@@ -470,6 +492,11 @@ class _Parser:
             # Decision 2: an op with no SSA operands prints its *result* type.
             result_types = colon_types
             operand_types = []
+        elif not saw_arrow and len(colon_types) == 1 and " to " in colon_types[0]:
+            # MLIR cast operations: 
+            src_t, dst_t = colon_types[0].split(" to ", 1)
+            operand_types = [src_t.strip()]
+            result_types = [dst_t.strip()]
 
         return RawOp(
             name=name,
@@ -501,7 +528,7 @@ class _Parser:
 
     def fail_region_too_deep(self, depth: int) -> None:
         self.fail(
-            f"region nesting of at most {MAX_REGION_DEPTH} levels (EC-027)",
+            f"region nesting of at most {MAX_REGION_DEPTH} levels",
             found=f"{depth + 1} levels",
         )
         self.skip_region()
@@ -653,7 +680,21 @@ class _Parser:
                     attrs[key] = value
                 first = False
                 continue
-            if t.kind == lx.PUNCT and t.text in "([":
+            if t.kind == lx.PUNCT and t.text == "(":
+                lo = self.i
+                self.skip_bracket_group()
+                text = self.text_of(lo, self.i)
+                inner = text[1:-1].strip()
+                items = [s.strip() for s in inner.split(",") if s.strip()]
+                if items and all(it.startswith("%") for it in items):
+                    for it in items:
+                        operands.append(it)
+                        has_ssa = True
+                    first = False
+                    if self.peek().kind == lx.PUNCT and self.peek().text == ",":
+                        self.i += 1
+                    continue
+            elif t.kind == lx.PUNCT and t.text == "[":
                 lo = self.i
                 self.skip_bracket_group()
                 text = self.text_of(lo, self.i)
@@ -690,6 +731,10 @@ class _Parser:
         if t.kind in (lx.EOF, lx.ERROR, lx.ARROW, lx.OPNAME):
             return True
         if t.kind == lx.PUNCT and t.text in _OPERAND_STOP_PUNCT:
+            return True
+        if t.kind == lx.PUNCT and t.text == "<" and self.peek(1).text == "{":
+            return True
+        if t.kind == lx.PUNCT and t.text == "(" and self.peek(1).text == "{":
             return True
         return t.kind == lx.IDENT and t.text in _CLAUSE_KEYWORDS
 
@@ -871,7 +916,7 @@ class _Parser:
         return None
 
     def parse_loc(self) -> RawLoc | None:
-        """`loc(…)` in any of the printer's forms. Never fails the parse (FR-002)."""
+        """`loc(…)` in any of the printer's forms. Never fails the parse."""
         self.i += 1  # `loc`
         if not (self.peek().kind == lx.PUNCT and self.peek().text == "("):
             return None
@@ -889,7 +934,7 @@ class _Parser:
         if not toks:
             return RawLoc("unknown")
         if len(toks) == 1 and toks[0].kind == lx.LOCREF:
-            return RawLoc(toks[0].text)  # a table reference, resolved by Track B
+            return RawLoc(toks[0].text)  # a table reference, resolved by to_ir.py
         if len(toks) == 1 and toks[0].kind == lx.IDENT:
             return RawLoc(toks[0].text)  # loc(unknown)
         if toks[0].kind == lx.STRING:
@@ -939,7 +984,7 @@ class _Parser:
                 # A label opens a block. If operations have already been
                 # collected they are the previous block; a second label in a row
                 # is an empty block; but a label that opens the region *is* the
-                # entry block, so no empty block is prepended for it (EC-016).
+                # entry block, so no empty block is prepended for it.
                 if ops or blocks:
                     blocks.append(self.make_block(args, ops))
                 args, ops = self.parse_block_label(), []
@@ -980,9 +1025,11 @@ class _Parser:
             for lo, hi in self.split_top_level(self.i + 1, end):
                 eq = self.find_top_level_colon(lo, hi)
                 if eq < 0:
-                    args.append(("", self.text_of(lo, hi)))
+                    raw_type = self.text_of(lo, hi)
+                    args.append(("", raw_type.split(" loc(")[0].strip()))
                 else:
-                    args.append((self.text_of(lo, eq), self.text_of(eq + 1, hi)))
+                    raw_type = self.text_of(eq + 1, hi)
+                    args.append((self.text_of(lo, eq).strip(), raw_type.split(" loc(")[0].strip()))
             self.i = end + 1
         if self.peek().kind == lx.PUNCT and self.peek().text == ":":
             self.i += 1
@@ -1007,7 +1054,7 @@ def parse_raw(text: str, *, source_path: str = "<string>") -> RawModule:
     """Parse `ttir` text into a `RawModule`. Total: never raises, never hangs.
 
     A `RawModule` with a non-empty `diagnostics` list is unusable: the consumer
-    (`ttir/to_ir.py`) must refuse it rather than build a partial IR (FR-001).
+    (`ttir/to_ir.py`) must refuse it rather than build a partial IR.
     """
     if not isinstance(text, str):
         # Totality includes inputs that are not strings at all: a caller that
@@ -1030,7 +1077,7 @@ def parse_raw(text: str, *, source_path: str = "<string>") -> RawModule:
         )
     module = _Parser(text, source_path).parse()
     if module.diagnostics:
-        # `contracts/ttir-parser.md`: a failed parse returns "no partial
+        # A failed parse returns "no partial
         # module". A half-built tree would make the invariant a promise the
         # next stage has to keep (`if diagnostics: refuse`), and one forgotten
         # check would lower a tree that cannot be trusted. Dropping the ops
@@ -1043,7 +1090,7 @@ def parse_raw(text: str, *, source_path: str = "<string>") -> RawModule:
 def with_triton_version(raw: RawModule, version: str | None) -> RawModule:
     """Attach the producing Triton version.
 
-    Kept separate so `parse_raw`'s signature stays exactly as contracted; the
+    Kept separate so `parse_raw`'s signature stays minimal; the
     texture extraction harness is the only caller that knows the version.
     """
     return replace(raw, triton_version=version)

@@ -4,7 +4,7 @@
 :class:`~tritonflow.emit.ir.Binding` per operation, which is the form
 `emit.assemble` consumes.
 
-**`annotate` never mutates the module** (FR-010, FR-011). It returns a new
+**`annotate` never mutates the module**. It returns a new
 :class:`AnnotationSet` keyed by operation *identity* (`id(op)`), not by a field
 written back onto the operation. `Operation` is frozen, so this is not politeness:
 a pass that annotated in place could not be run twice, and the second run would
@@ -24,10 +24,9 @@ plausibly be dropped (return `()`), and then the program's marker would read
 and the *addressing* was the problem. The reason has to name the actual failure,
 because the coverage report's whole job is to say which frontier we stopped at.
 
-**Bindings carry `kind`, not an instruction name, by default.** `contracts/
-selector.md` makes the *emitter* the selector's consumer and
-`methodology-v2.tex` §Backend assembly says assembly "selects the minimum-cost
-variant consistent with the verified α attributes", so the recogniser states what
+**Bindings carry `kind`, not an instruction name, by default.** The emitter is
+the selector's consumer, and assembly selects the minimum-cost variant
+consistent with the verified attributes, so the recogniser states what
 it recognised and assembly decides the instruction. `instruction_for` exists for
 callers that already have a schema and want to name instructions directly (the
 frozen stand-in's mode, used by the emitter checks) — it is a convenience for
@@ -40,6 +39,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from ..emit.ir import Binding, Imm, MemRef, SsaRef
+from ..isa.predicates import COMPARE_OPS, PredicateError, predicate_code
 from ..recognize import op_shapes as shapes
 from ..recognize.descriptor import (
     AccessDescriptor,
@@ -68,7 +68,7 @@ RULE_MEMORY = shapes.RULE_MEMORY
 RULE_MAC = shapes.RULE_MAC
 RULE_ELEMENTWISE = shapes.RULE_ELEMENTWISE
 
-#: The memory space the ISA-1 model has (`data-model.md` §1.1: one `flat` space).
+#: The memory space the ISA-1 model has (one `flat` space).
 DEFAULT_SPACE = "global"
 
 
@@ -91,7 +91,7 @@ def detect_mac(module: Module, graph: DefUseGraph | None = None) -> tuple[MatchR
     The four requirements are checked in the order they can fail, and each
     failure is a *non-match* rather than an error: a loop without a dot is not a
     malformed MAC, it is Tier 0's loop, which does not exist, and Tier 3's, which
-    must come back with zero matches (EC-049, EC-050).
+    must come back with zero matches.
 
     The yield check is the one that makes this a *reduction* rather than "there is
     a dot in a loop": the dot's result must be what `scf.yield` re-threads at the
@@ -278,6 +278,7 @@ class AnnotationSet:
     matches: tuple[MatchResult, ...] = ()
     refusals: tuple[tuple[str, str], ...] = ()
     unsupported: tuple[str, ...] = ()
+    subsumed_loop_slots: frozenset[tuple[int, int]] = frozenset()
     _by_id: dict[int, tuple[Binding, ...]] = field(default_factory=dict, repr=False)
 
     def bindings_for(self, op: Operation) -> tuple[Binding, ...]:
@@ -304,23 +305,58 @@ class AnnotationSet:
 
 
 
-def find_subsumed_address_ops(module: Module, graph: DefUseGraph, space: str = DEFAULT_SPACE) -> set[int]:
-    """Find operations whose computations are fully subsumed into structured memory descriptors."""
+def _address_cone(
+    module: Module, graph: DefUseGraph, space: str = DEFAULT_SPACE
+) -> tuple[set[int], set[tuple[int, int]]]:
+    """(ids of operations subsumed by memory descriptors, subsumed loop-carried slots).
+
+    A structured memory access carries its own base, sizes, strides, offsets and
+    loop increment, so the pointer arithmetic that produced its address is redundant
+    once the descriptor exists. That arithmetic is elided when *every* consumer is
+    itself elided or is a memory operation reading it as an address or mask.
+
+    Loop-carried pointers are followed through the loop: a pointer that enters an
+    `iter_arg`, is advanced in the body and yielded back is one *slot*. When the
+    slot's argument and result are consumed only by elided code, the whole chain
+    (initialiser, increment, yield) is elided together and the slot is dropped from
+    the emitted loop. A slot whose value is used by anything live keeps its chain.
+    """
+    from ..ttir.graph import iter_loops
+
+    loops = list(iter_loops(module))
+    loop_by_op = {id(info.op): info for info in loops}
+    loop_of_yield = {id(info.yield_op): info for info in loops if info.yield_op is not None}
+    slot_of_arg = {
+        arg.name: (info, j) for info in loops for j, arg in enumerate(info.iter_args)
+    }
+
     structured_mem_ops = []
     for op in graph.operations:
         if shapes.is_memory_op(op):
             ptr = shapes.pointer_operand(op)
-            if ptr is not None:
-                res = describe(ptr, (space,), graph)
-                if isinstance(res, Ok):
-                    structured_mem_ops.append(op)
+            if ptr is not None and isinstance(describe(ptr, (space,), graph), Ok):
+                structured_mem_ops.append(op)
 
-    addr_producer_ids = set()
-    def trace(val):
+    addr_producer_ids: set[int] = set()
+    traced_slots: set[tuple[int, int]] = set()
+
+    def trace(val) -> None:
         if val is None:
             return
         op = val.def_op
-        if op is None or id(op) in addr_producer_ids:
+        if op is None:
+            found = slot_of_arg.get(val.name)
+            if found is not None:
+                info, j = found
+                key = (id(info.op), j)
+                if key in traced_slots:
+                    return
+                traced_slots.add(key)
+                trace(info.inits[j])
+                if j < len(info.yields):
+                    trace(info.yields[j])
+            return
+        if id(op) in addr_producer_ids:
             return
         if shapes.is_memory_op(op) or shapes.is_dot(op):
             return
@@ -329,43 +365,71 @@ def find_subsumed_address_ops(module: Module, graph: DefUseGraph, space: str = D
             trace(operand)
 
     for mem_op in structured_mem_ops:
-        ptr = shapes.pointer_operand(mem_op)
-        trace(ptr)
+        trace(shapes.pointer_operand(mem_op))
         if mem_op.name == shapes.LOAD and len(mem_op.operands) > 1:
             trace(mem_op.operands[1])
         elif mem_op.name == shapes.STORE and len(mem_op.operands) > 2:
             trace(mem_op.operands[2])
 
-# To correctly handle shared paths where one branch is subsumed and another is not,
-    # we start with all addr_producer_ids, then remove any op that has a user NOT in subsumed_ids
-    # (unless that user is a memory op reading this as the value to store).
     subsumed_ids = set(addr_producer_ids)
+    slots = set(traced_slots)
+
+    def user_is_live(user: Operation, name: str) -> bool:
+        """Does `user` need `name` as a value, given the current subsumed set?"""
+        if id(user) in subsumed_ids:
+            return False
+        if shapes.is_memory_op(user):
+            val_op = shapes.value_operand(user)
+            return val_op is not None and val_op.name == name
+        loop = loop_by_op.get(id(user))
+        if loop is not None:
+            if any(v is not None and v.name == name for v in (loop.lower, loop.upper, loop.step)):
+                return True
+            return any(
+                init.name == name and (id(user), j) not in slots for j, init in enumerate(loop.inits)
+            )
+        loop = loop_of_yield.get(id(user))
+        if loop is not None:
+            return any(
+                y.name == name and (id(loop.op), j) not in slots for j, y in enumerate(loop.yields)
+            )
+        return True
+
     changed = True
     while changed:
         changed = False
         for op in graph.operations:
             if id(op) not in subsumed_ids:
                 continue
-            is_consumed_by_live = False
-            for r in op.results:
-                for user in graph.uses.get(r.name, ()):
-                    if id(user) in subsumed_ids:
-                        continue
-                    if shapes.is_memory_op(user):
-                        val_op = shapes.value_operand(user)
-                        if val_op is not None and val_op.name == r.name:
-                            is_consumed_by_live = True
-                            break
-                    else:
-                        is_consumed_by_live = True
-                        break
-                if is_consumed_by_live:
-                    break
-            if is_consumed_by_live:
+            if any(user_is_live(u, r.name) for r in op.results for u in graph.uses.get(r.name, ())):
                 subsumed_ids.remove(id(op))
                 changed = True
+        for key in list(slots):
+            info = next(i for i in loops if id(i.op) == key[0])
+            j = key[1]
+            arg = info.iter_args[j]
+            results = info.results
+            arg_live = any(user_is_live(u, arg.name) for u in graph.uses.get(arg.name, ()))
+            result_live = j < len(results) and any(
+                user_is_live(u, results[j].name) for u in graph.uses.get(results[j].name, ())
+            )
+            if arg_live or result_live:
+                slots.discard(key)
+                changed = True
 
-    return subsumed_ids
+    return subsumed_ids, slots
+
+
+def find_subsumed_address_ops(module: Module, graph: DefUseGraph, space: str = DEFAULT_SPACE) -> set[int]:
+    """Ids of operations whose computation is fully subsumed into structured memory descriptors."""
+    return _address_cone(module, graph, space)[0]
+
+
+def find_subsumed_loop_slots(
+    module: Module, graph: DefUseGraph, space: str = DEFAULT_SPACE
+) -> set[tuple[int, int]]:
+    """`(id(scf.for op), slot)` pairs whose loop-carried value is a subsumed pointer chain."""
+    return _address_cone(module, graph, space)[1]
 
 
 def annotate(
@@ -396,7 +460,8 @@ def annotate(
     rules = dict(instruction_for or {})
     unsafe_set = frozenset(unsafe)
 
-    subsumed_ids = find_subsumed_address_ops(module, graph, space) if elide_address_math else set()
+    subsumed_ids, loop_slots = _address_cone(module, graph, space) if elide_address_math else (set(), set())
+    annotations.subsumed_loop_slots = frozenset(loop_slots)
 
     for op in walk_region(module.body):
         if op.name in unsafe_set:
@@ -539,12 +604,26 @@ def _binding_for(
             reason=result.reason,
             defs=defs,
         )
+    operands: dict[str, object] = {
+        f"in{index}": _reference(value, graph) for index, value in enumerate(op.operands)
+    }
+    if op.name in COMPARE_OPS:
+        # The predicate is what makes a compare a compare: without it `sge` and `ne` are the
+        # same instruction. It travels as the MLIR enum value in an Imm operand.
+        literals = op.literal_tokens
+        try:
+            operands["predicate"] = Imm(value=predicate_code(op.name, literals[0] if literals else None))
+        except PredicateError as error:
+            return Binding(
+                instruction=None,
+                kind=RULE_ELEMENTWISE,
+                reason=str(error),
+                defs=defs,
+            )
     return Binding(
         instruction=_named(rules, RULE_ELEMENTWISE, select_here),
         kind=RULE_ELEMENTWISE,
-        operands={
-            f"in{index}": _reference(value, graph) for index, value in enumerate(op.operands)
-        },
+        operands=operands,
         defs=defs,
         descriptor=result.descriptor,
     )
@@ -591,8 +670,8 @@ def _materialised_value(op: Operation) -> _Materialised:
 
     Every one of the three used to record `Imm(0)`. `%c64_i32` said 0; a program
     id lost its axis. That made the emitted program *unexecutable as written*:
-    FR-021 requires the emulator to run the instruction stream and explicitly not
-    to re-derive the kernel from the source module, and a stream claiming every
+    the emulator runs the instruction stream and explicitly does not
+    re-derive the kernel from the source module, and a stream claiming every
     constant is zero cannot be run that way. Nothing caught it because the
     emulator is the first consumer that has to read the value; every earlier
     consumer — the schema, the selector, the serialiser — only had to carry it.
@@ -666,7 +745,7 @@ def _mac_descriptor(op: Operation, graph: DefUseGraph, space: str) -> AccessDesc
     Walking `a` back to the `tt.load` that produced it and describing *its* pointer
     is what makes `aligned(a_base, 4)`, `m % 16 == 0` and `stride[1] == 1`
     decidable rather than `unknown` — and `unknown` is inadmissible under
-    `isa/schema.py:evaluate`'s fail-closed rule (FR-017). `None` when `a` is not
+    `isa/schema.py:evaluate`'s fail-closed rule. `None` when `a` is not
     the result of a describable load, which the emitter handles as any other
     absent descriptor.
     """
@@ -695,4 +774,5 @@ __all__ = [
     "detect_epilogue",
     "detect_mac",
     "find_subsumed_address_ops",
+    "find_subsumed_loop_slots",
 ]

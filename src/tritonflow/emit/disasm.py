@@ -1,15 +1,15 @@
-"""`serialize` / `deserialize` / `disassemble` — `contracts/assembler.md`.
+"""`serialize` / `deserialize` / `disassemble` — the program's text forms.
 
 Two text forms, deliberately different, because they answer different questions:
 
 * :func:`serialize` is the **durable** form. It is parsed by
-  :func:`deserialize`, it is byte-stable across processes (FR-004), and it is
+:func:`deserialize`, it is byte-stable across processes, and it is
   the artifact a consumer reads without the schema — hence the header's
   `total_cost`. Every free-text field is percent-quoted, so a constraint, a
   reason or a descriptor key can contain a space, a comma or a newline without
   ending the line's grammar.
 * :func:`disassemble` is the **readable** form. Unquoted, aligned, carrying the
-  `loc` names in trailing comments (EC-082). It is deliberately *not* an input
+  `loc` names in trailing comments. It is deliberately *not* an input
   to `deserialize`: one format that is both pretty and exactly reversible is
   how a parser grows a special case for alignment whitespace.
 
@@ -34,7 +34,7 @@ container, not a flag on an instruction: without it, a round-trip would file
 every post-loop instruction under `instrs` and postcondition 3 would fail on the
 one kernel (T2) that has an epilogue at all.
 
-`MemRef.access` — the Track C descriptor object — is deliberately not written:
+`MemRef.access` — the recognition descriptor object — is deliberately not written:
 it has no textual inverse, so `access_key` is what the file carries (see
 `emit.ir.MemRef`).
 
@@ -244,7 +244,7 @@ def _pairs(line: str, keys: tuple[str, ...], *, what: str) -> dict[str, str]:
 
 
 def serialize(program: Program) -> str:
-    """The durable text form. Byte-stable for equal programs (FR-004, FR-020)."""
+    """The durable text form. Byte-stable for equal programs."""
     validate_program(program)
 
     lines = [
@@ -339,7 +339,7 @@ def deserialize(text: str, *, expect_schema_version: int | None = None) -> Progr
     """The inverse of :func:`serialize`, refusing anything it cannot read.
 
     `expect_schema_version` is the contract's "refuse with a clear error; never
-    reinterpret" (EC-068): given the schema actually loaded, a file written by
+    reinterpret": given the schema actually loaded, a file written by
     another revision is not approximated, it is rejected.
     """
     lines = [line for line in text.splitlines() if line.strip() != ""]
@@ -534,7 +534,7 @@ def _parse_marker(line: str) -> UnsupportedMarker:
 
 
 def disassemble(program: Program) -> str:
-    """The readable form (EC-082). Not an input to :func:`deserialize`."""
+    """The readable form. Not an input to:func:`deserialize`."""
     inputs = ", ".join(program.inputs) if program.inputs else "(none)"
     lines = [
         f"; {program.isa_name} v{program.schema_version}  kernel={program.kernel_name}  "

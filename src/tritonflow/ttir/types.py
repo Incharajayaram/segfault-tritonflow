@@ -1,15 +1,15 @@
-"""Type text -> :class:`TypeExpr`. Track B's half of the parser/IR seam.
+"""Type text -> :class:`TypeExpr`. The semantic layer's half of the parser/IR seam.
 
-`contracts/raw-module.md` keeps type text as *text* in Track A ("Track A never
-decides what a type means; Track B never looks at a character of source"). This
-module is the only place that decides what a type means, and it is where
-EC-012 … EC-014 are answered:
+The syntax layer keeps type text as *text* ("the syntax layer never
+decides what a type means; the semantic layer never looks at a character of
+source"). This module is the only place that decides what a type means, and
+it is where the following edge cases are answered:
 
 | Edge case | Answer |
 |---|---|
-| EC-012 `-> tensor<64x64xf32>` | ``shape == (64, 64)``, ``dtype == "f32"`` |
-| EC-013 `!tt.ptr<f32, 1>` | ``ptr_space == 1`` |
-| EC-014 `tensor<64x64x!tt.ptr<f32>>` | ``shape == (64, 64)`` **and** ``element.kind == "ptr"`` |
+| `-> tensor<64x64xf32>` | ``shape == (64, 64)``, ``dtype == "f32"`` |
+| `!tt.ptr<f32, 1>` | ``ptr_space == 1`` |
+| `tensor<64x64x!tt.ptr<f32>>` | ``shape == (64, 64)`` **and** ``element.kind == "ptr"`` |
 
 Two deliberate choices, both because a type is shared between many values:
 
@@ -121,7 +121,7 @@ def _parse_ptr(text: str, raw: str) -> TypeExpr:
     """``!tt.ptr<f32>`` / ``!tt.ptr<f32, 1>``.
 
     The address space is the second, comma-separated parameter, and its absence
-    is *not* the same as address space 0 — EC-013 distinguishes a flag that is
+ is *not* the same as address space 0 — distinguishes a flag that is
     set from one that was never printed, so ``None`` is kept.
     """
     if not text.startswith("!tt.ptr<"):

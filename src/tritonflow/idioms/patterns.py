@@ -1,13 +1,13 @@
 """The two patterns, as data: what each one requires, and what a match looks like.
 
-`data-model.md` §4. The patterns are written down as *requirements* rather than as
+The patterns are written down as *requirements* rather than as
 detection code because the requirements are what a reader has to check — "does
 Tier 0 match the MAC pattern?" is answerable from this file alone, which is what
 makes the two true negatives (Tier 0 and Tier 3) meaningful rather than
 incidental.
 
 **`multiplicity` is defined here, once.** Several matches of one pattern can exist
-in one module (two independent `tt.dot`s: EC-051), and the contract requires both
+in one module (two independent `tt.dot`s:), and the contract requires both
 to be reported rather than the first. So `multiplicity` counts the match *sites*
 found for this pattern in one detection pass, and every `MatchResult` from that
 pass carries the same number. A reader who sees only one of them cannot tell
@@ -52,7 +52,7 @@ EPILOGUE_REQUIRED: Mapping[str, str] = MappingProxyType(
 
 EPILOGUE_OPTIONAL: tuple[str, ...] = ("a further elementwise chain after the first op",)
 
-#: `EpiloguePattern.classify`'s four values, from `data-model.md` §4.
+#: `EpiloguePattern.classify`'s four values.
 EPILOGUE_CLASSES = ("add", "sub", "mul", "relu", "other")
 
 #: Op name → class. Names, not semantics: this table is the *decision* about what
@@ -139,14 +139,13 @@ def tile_of(op: Operation) -> tuple[int, int, int] | None:
 
 @dataclass(frozen=True)
 class MatchResult:
-    """One idiom occurrence. `data-model.md` §4, plus the two fields §4 implies.
+    """One idiom occurrence, plus the two fields that implies.
 
     `bindings` holds `SsaValue`s by role — `{"a": …, "b": …, "acc": …}` for a MAC —
-    and `tile` holds `(m, n, k)`, which §4's own example shows in `bindings` while
-    listing `tile_shape` as its own field. Both are populated: `bindings["tile"]`
+    and `tile` holds `(m, n, k)`. Both are populated: `bindings["tile"]`
     is what an annotation reads, `tile_shape` is what a report prints.
 
-    `classify` is §4's `EpiloguePattern.classify`, carried on the match rather than
+    `classify` is `EpiloguePattern.classify`, carried on the match rather than
     on the pattern so a report can say which chain was classified *how*.
     """
 
@@ -162,8 +161,8 @@ class MatchResult:
     def __post_init__(self) -> None:
         if self.pattern_id not in (MAC_ID, EPILOGUE_ID):
             raise ValueError(
-                f"unknown pattern id {self.pattern_id!r}; data-model.md §4 defines "
-                f"{MAC_ID!r} and {EPILOGUE_ID!r}"
+                f"unknown pattern id {self.pattern_id!r}; only "
+                f"{MAC_ID!r} and {EPILOGUE_ID!r} are defined"
             )
 
     @property

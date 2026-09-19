@@ -1,25 +1,26 @@
 """`RawModule` → `Module`. Where text becomes semantics.
 
-`contracts/raw-module.md` draws one line and this module is the other side of it:
-Track A refuses what it cannot *read*, and this module refuses what it can read
-but cannot *mean*. Every diagnostic raised here carries ``layer="ir"`` so a
-failing test names the owning track instead of starting a negotiation.
+There is one line between syntax and semantics, and this module is the semantic
+side of it: the syntax layer refuses what it cannot *read*, and this module
+refuses what it can read but cannot *mean*. Every diagnostic raised here
+carries ``layer="ir"`` so a failing test names the owning layer instead of
+starting a negotiation.
 
 What happens here, in the order the invariants need it:
 
 1. **The syntax verdict is passed through, not re-derived.** If `RawModule.diagnostics`
-   is non-empty the module is already unusable (postcondition 8); returning the
+   is non-empty the module is already unusable; returning the
    syntax layer's own diagnostic keeps the two failure routes from blurring.
 2. **`loc` references are bound** against the `#loc` table. A reference with no
-   entry is invalid IR, not a syntax error — the text was read fine
-   (`contracts/raw-module.md`, "The two-layer failure route").
-3. **Operands resolve.** A `%name` that no definition provides is invalid IR
-   (EC-026-adjacent), and a *bare* multi-result name is the arity mismatch of
-   EC-005: `%acc_25:3 = scf.for …` defines three values named `%acc_25`,
+   entry is invalid IR, not a syntax error — the text was read fine, it just
+   does not resolve.
+3. **Operands resolve.** A `%name` that no definition provides is invalid IR,
+   and a *bare* multi-result name is an arity mismatch:
+   `%acc_25:3 = scf.for …` defines three values named `%acc_25`,
    `%acc_25#1`, `%acc_25#2`, so `arith.addi %acc_25, %acc_25` is arity 1 against
    a 3-result definition.
-4. **Every result is bound** (FR-002) and every result name is defined exactly
-   once — never last-def-wins (EC-026).
+4. **Every result is bound** and every result name is defined exactly
+   once — never last-def-wins.
 5. **Every type is parsed**, and a type that is not a type is invalid IR
    (``tensor<64x64x???>``) while a dynamic shape (``tensor<?x64xf32>``) is a
    legal type with an unknown extent. The distinction is the whole reason
@@ -41,9 +42,9 @@ import os
 from pathlib import Path
 
 # `build_def_use`, `walk_region` and `topo_within_region` are re-exported so the
-# interface `contracts/ttir-parser.md` lists in one block is reachable from the
-# module that block names. The definitions live in `graph.py`, next to the
-# traversal they belong with — one implementation, one import surface.
+# graph-traversal interface is reachable from this module too. The definitions
+# live in `graph.py`, next to the traversal they belong with — one
+# implementation, one import surface.
 from .graph import build_def_use, topo_within_region, walk_region
 from .parser import ParseDiagnostic, RawModule, RawOp, parse_raw
 from .ssa import Attr, Block, Loc, Module, Operation, ParseResult, Region, SsaValue
@@ -53,9 +54,9 @@ BOM = "\ufeff"
 
 
 def parse_module(text: str, *, source_path: str = "<string>") -> ParseResult:
-    """The contracted entry point: arbitrary text in, exactly one half out.
+    """The public entry point: arbitrary text in, exactly one half out.
 
-    Never raises (FR-001). Composes the two layers in the order the seam
+    Never raises. Composes the two layers in the order the seam
     requires — syntax first, then semantics — because running the semantic pass
     over text that could not be read would produce diagnostics about the wrong
     thing.
@@ -64,7 +65,7 @@ def parse_module(text: str, *, source_path: str = "<string>") -> ParseResult:
 
 
 def parse_file(path: str | os.PathLike[str]) -> ParseResult:
-    """`parse_module` for a file, handling BOM and CRLF (EC-019, EC-020).
+    """`parse_module` for a file, handling BOM and CRLF.
 
     Decoding is explicit and tolerant: a fixture checked out on another platform
     must not become a parse failure.
@@ -107,10 +108,11 @@ def build_ir(raw: RawModule, *, raise_on_invalid: bool = False) -> ParseResult:
 def bind_results(op: RawOp) -> list[SsaValue]:
     """One `SsaValue` per result of `op` — **every** result, not the first.
 
-    The Tier-1 loop binds three (`%acc_25`, `%acc_25#1`, `%acc_25#2`), which is
-    EC-004 and FR-002. A discarded result position (`None`, which the contract
-    allows) produces no value but still advances :attr:`SsaValue.index`, so the
-    surviving values keep the slot they had in the printed form.
+    The Tier-1 loop binds three (`%acc_25`, `%acc_25#1`, `%acc_25#2`), the
+    multi-result case this function exists for. A discarded result position
+    (`None`, which is allowed) produces no value but still advances
+    :attr:`SsaValue.index`, so the surviving values keep the slot they had in
+    the printed form.
     """
     arity = len(op.results)
     values: list[SsaValue] = []
@@ -178,7 +180,7 @@ class _Builder:
         `ParseResult` carries one diagnostic, so which one is a decision the
         layer has to make explicitly: earliest position, then insertion order.
         Picking "whatever the walk happened to report first" would make the
-        message depend on traversal and break FR-004.
+ message depend on traversal and break.
         """
         return min(
             self.diagnostics,

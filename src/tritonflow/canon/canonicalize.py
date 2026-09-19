@@ -1,4 +1,4 @@
-"""Canonicalisation that makes **no reduction claim**. FR-012, `research.md` R4.
+"""Canonicalisation that makes **no reduction claim**.
 
 v1 of the methodology justified this pass with a premise its own dump disproves:
 that `ttir` carries "redundant `tt.splat`/`tt.broadcast` chains" to collapse.
@@ -104,7 +104,7 @@ def assert_no_reduction_claim(before: Module, after: Module) -> None:
     implementation above they pass by construction. That is the point — the guard
     exists so that the *next* change, the one that adds a "harmless" folding
     pass to "improve" the numbers, fails here instead of quietly inflating a
-    coverage percentage in `report/coverage.py` (research.md R4, T-8-adjacent).
+    coverage percentage in `report/coverage.py`.
     """
     before_ops = _count_ops(before)
     after_ops = _count_ops(after)
@@ -112,7 +112,7 @@ def assert_no_reduction_claim(before: Module, after: Module) -> None:
         raise CanonError(
             f"canonicalisation changed the operation count ({before_ops} -> {after_ops}); "
             "this pass is not allowed to remove or add operations — the corpus has no "
-            "redundancy to remove (research.md R4)"
+            "redundancy to remove"
         )
     if canonical_form(before) != canonical_form(after):
         raise CanonError(

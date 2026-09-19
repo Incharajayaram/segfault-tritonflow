@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 tritonflow-demo — Master Presentation Launcher for TritonFlow
@@ -11,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import subprocess
 import sys
 import time
@@ -21,18 +23,14 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from rich import box
 from rich.align import Align
-from rich.columns import Columns
 from rich.console import Console
-from rich.live import Live
-from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.prompt import IntPrompt, Prompt
 from rich.rule import Rule
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
-from rich.tree import Tree
 
 console = Console(width=120)
 
@@ -219,7 +217,7 @@ output = matmul(a, b)
 """, "python", "User's PyTorch code (unchanged)")
 
     with _spinner("Extracting Triton MLIR IR…") as prog:
-        task = prog.add_task("", total=None)
+        prog.add_task("", total=None)
         prog.start()
         ext   = extract_matmul(128, 128, 64)
         res   = parse_module(ext.ttir)
@@ -248,7 +246,7 @@ output = matmul(a, b)
     result_table.add_column("VORTEX_RVGPU", style="bold green", width=24)
 
     progs = {}
-    cost_row = ["[bold]Total Cost[/]"]
+    cost_row = ["[bold]Total Cost (modelled cost (uncalibrated) — not comparable across targets)[/]"]
     for isa_id, _, _ in targets:
         schema = load_builtin(isa_id)
         progs[isa_id] = assemble(res.module, graph, ann, schema, env=ext.env)
@@ -271,7 +269,7 @@ output = matmul(a, b)
             result_table.add_row(src_op or f"op[{i}]", *row)
 
     for isa_id, _, colour in targets:
-        cost_row.append(f"[bold {colour}]{progs[isa_id].total_cost:.0f} cycles[/]")
+        cost_row.append(f"[bold {colour}]{progs[isa_id].total_cost:.0f} cycles (uncalibrated)[/]")
     result_table.add_row(*cost_row)
     console.print(result_table)
 
@@ -336,7 +334,7 @@ def demo_instruction_audit(auto: bool):
                 else "[dim yellow]Rejected (higher cost)[/]"
             )
         else:
-            verdict  = f"[red]✖ FAIL[/]"
+            verdict  = "[red]✖ FAIL[/]"
             decision = "[red]Rejected (inadmissible)[/]"
         audit.add_row(
             cand.name,
@@ -393,14 +391,11 @@ output = opt_mlp(x)   # TritonFlow intercepts graph capture here
 
     # Run through compiler — graph capture & lowering always succeeds;
     # full emulation of 2-D matmul tiles is an ongoing area of work.
-    emu_err = None
     toy_y   = None
     with _spinner("Compiling MLP graph with torch.compile…") as prog:
         prog.start()
-        try:
+        with contextlib.suppress(Exception):
             toy_y = opt_mlp(x)
-        except Exception as exc:
-            emu_err = exc
         prog.stop()
 
     results = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
@@ -522,7 +517,7 @@ def demo_arch_diff(auto: bool):
         matrix.add_row("Compute Unit",       "MAC16 (16×16 Systolic)",     "OPU32 (32×32 Outer Prod.)",  "TCU_WGMMA_SP32 (Sparse)")
         matrix.add_row("Memory Engine",      "DMA1D / DMA2D (flat)",       "LDG (16-bank interleaved)",  "DXA Async DMA (1D–5D)")
         matrix.add_row("Sparsity",           "Dense only  (1.0×)",         "Dense only  (1.0×)",         "2:4 Structured (2.0×)")
-        matrix.add_row("Compute Cost/tile",  "358.4 cycles",               "70.4 cycles",                "[bold green]19.2 cycles (18.6× faster)[/]")
+        matrix.add_row("Compute Cost/tile [uncalibrated]",  "358.4 cycles",               "70.4 cycles",                "[bold green]19.2 cycles (18.6× faster)[/]")
         matrix.add_row("Total Kernel Cost",
             f"{progs['tritonflow1'].total_cost:.0f} cycles",
             f"{progs['tritonflow2'].total_cost:.0f} cycles",

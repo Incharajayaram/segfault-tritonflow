@@ -1,7 +1,7 @@
 """Traversal over the parsed IR: def-use, region-aware walking, loop structure.
 
 Three questions that look similar and must not be confused, because conflating
-them is the failure mode T-4 names — the one that produces right-looking numbers
+them is the failure mode names — the one that produces right-looking numbers
 from a flattened module:
 
 | Question | Function | Nested operations? |
@@ -65,7 +65,7 @@ def topo_within_region(region: Region) -> list[Operation]:
     Region-local by construction: the candidate set is :func:`region_ops`, so an
     operation inside a nested region cannot appear here at all. Ties are broken
     by source position through a heap, so the order is total and identical on
-    every run and every `PYTHONHASHSEED` (FR-004) — a set iteration here would
+    every run and every `PYTHONHASHSEED` — a set iteration here would
     be invisible until two machines disagreed.
 
     SSA guarantees a definition dominates its uses, so for a well-formed module
@@ -110,7 +110,7 @@ class LoopInfo:
     """A structured reduction loop: `scf.for` and the values it threads.
 
     `iter_args[i]` is the block argument that `inits[i]` feeds on entry; pairing
-    them is what makes the loop-carried operand of EC-028 decidable at all.
+ them is what makes the loop-carried operand of decidable at all.
     """
 
     op: Operation
@@ -189,7 +189,7 @@ class DefUseGraph:
     Keyed by SSA *name*, not by `Operation`: operations hold tuples and dicts, so
     they are not hashable, and a graph that needed a custom hash would be a
     hidden place for two equal operations to collide. Names are unique per
-    module by construction (`to_ir` enforces it, EC-026).
+ module by construction (`to_ir` enforces it,).
     """
 
     defs: dict[str, SsaValue] = field(default_factory=dict)
@@ -203,7 +203,7 @@ class DefUseGraph:
     recurrence means finding the *loop* the block argument belongs to. A graph
     that carried only defs and uses could be built over any IR and would then
     quietly resolve every block argument as "not carried" — the exact omission
-    `contracts/access-descriptor.md` postcondition 2 exists to forbid.
+    the recognizer's descriptor walk must not make.
 
     `compare=False, repr=False` for the same reason `Region.parent` is: the
     module owns the operations the graph indexes, so including it in `==` or
@@ -240,7 +240,7 @@ def build_def_use(module: Module) -> DefUseGraph:
 
     Block arguments are defined before the operations of the region they open,
     so a value is never used before it is defined. A name defined twice raises
-    `ValueError`: `to_ir` already refuses such a module (EC-026), so reaching
+    `ValueError`: `to_ir` already refuses such a module, so reaching
     here with a duplicate means the graph is being built over something that did
     not come from `build_ir`, and silently keeping the last definition is how
     wrong answers get a clean bill of health.

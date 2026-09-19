@@ -1,10 +1,10 @@
-"""`assemble` — region-aware emission. `contracts/assembler.md`, `plan.md` §7.
+"""`assemble` — region-aware emission: Module + annotations + schema -> Program.
 
 The one thing this module must not do is flatten. Both `tt.load`s of Tier 1 live
 inside `scf.for`, `scf.yield` terminates the loop body, and the accumulator is
 loop-carried: a flat topological sort over the def-use graph loses all three
-facts and produces a program that looks plausible and computes the wrong thing
-(T-4, D10). So the unit of ordering here is the **region**:
+facts and produces a program that looks plausible and computes the wrong thing.
+So the unit of ordering here is the **region**:
 :func:`order_regions` walks the region tree and reports, for every operation,
 which region it belongs to; nothing downstream ever sees an operation without
 one.
@@ -15,12 +15,12 @@ Placement follows from that, and it is mechanical rather than clever:
 |---|---|
 | in the kernel body, before any loop | `Program.instrs` |
 | in a loop body | that `Loop.body`, with `Instr.loop == Loop.id` |
-| in the kernel body, after a loop, reading a value the loop yields | `Program.epilogue` (EC-076, EC-079) |
+| in the kernel body, after a loop, reading a value the loop yields | `Program.epilogue` |
 | in a nested `scf.for` | `UnsupportedMarker`, never a flattened instruction |
 
 `scf.yield` is not an instruction. It is how the loop re-threads its
-`iter_args`, so it is recorded as the loop's `results` and skipped (EC-074,
-EC-075). `tt.return` produces no value and is skipped for the same reason.
+`iter_args`, so it is recorded as the loop's `results` and skipped.
+`tt.return` produces no value and is skipped for the same reason.
 Every other value-producing operation is either an `Instr` or a marker — the
 union is exact, and `Program`'s construction-time validation is what checks it.
 
@@ -32,13 +32,12 @@ recogniser/selector side does, and hands the decision over as a `Binding`
 transitively, because a selector bug that silently picks an inadmissible
 instruction is exactly the failure this layer exists to catch. Where the schema
 exposes an evaluator (`isa.schema.evaluate`), the predicate is re-evaluated too;
-until Track D lands, the check is the structural half — the constraint must be
+otherwise the check is the structural half — the constraint must be
 present, and must have been chosen for *this* operand.
 
 **The two seams are duck-typed on purpose.** `SchemaLike` and
 `AnnotationSetLike` (in `emit.ir`) name the smallest sets of members assembly
-needs, because `isa/schema.py` is Track D's and `idioms/detect.py` is Track C's
-and neither exists yet: `parallelism.md` discipline 1 says every track must be
+needs from `isa/schema.py` and `idioms/detect.py`, so that every layer stays
 exercisable against hand-built input, and a `Protocol` is the cheapest way to
 say "this is the shape I consume" without inventing someone else's module.
 """
@@ -100,7 +99,7 @@ def order_regions(module: Module, graph: DefUseGraph) -> list[OrderedOp]:
     Region-aware, source order within each region, and never a flat topological
     sort: a loop's own operation is reported *before* its body, and its body is
     reported with `loop_id` set, so one pass over this list can create the
-    `Loop` and then fill it (T-4).
+    `Loop` and then fill it.
 
     `graph` checks that every ordered operation is one the graph knows about —
     passing a graph built from a different module is a bug that otherwise
@@ -182,10 +181,10 @@ def emit_instr(
 
     `loop` is placement, and placement is the caller's decision — but it is
     passed *in* rather than patched on afterwards, so an `Instr` never exists in
-    a state where it has forgotten which region it came from (FR-019).
+    a state where it has forgotten which region it came from.
 
-    `rejected`, `oracle_min_cost` and `gap` are the *selection* evidence
-    (FR-018, SC-005). They are keyword-only and default to empty so a caller that
+    `rejected`, `oracle_min_cost` and `gap` are the *selection* evidence.
+They are keyword-only and default to empty so a caller that
     chose the instruction itself passes nothing. They live here rather than on a
     separate record because a rejection with no instruction attached to it is not
     evidence of anything: the first version of this recorded the rejections on
@@ -223,6 +222,21 @@ def emit_instr(
 
     cost = binding.cost if binding.cost is not None else _cost_of(instruction, binding, env)
     constrained = _constraint_operand(binding)
+    cost_res = getattr(binding, "cost_result", None)
+    if cost_res is None and hasattr(instruction, "name"):
+        from tritonflow.isa.cost import CostQuery, CostResultError, CostUnknown, evaluate_cost
+        try:
+            cost_res = evaluate_cost(
+                CostQuery(
+                    instruction=instruction,
+                    access=getattr(binding, "descriptor", None),
+                    tile=getattr(binding, "tile", None),
+                    env=env or {},
+                )
+            )
+        except (CostUnknown, CostResultError) as exc:
+            cost_res = None
+            rejected = (*rejected, f"cost model: no structured cost for {instruction.name} ({exc})")
     instr = Instr(
         name=instruction.name,
         operands=dict(binding.operands),
@@ -232,6 +246,8 @@ def emit_instr(
         defs=tuple(binding.defs),
         constraint=_constraint_text(getattr(instruction, "constraint", None)),
         constrained_on=None if constrained is None else _constraint_key(constrained),
+        cost_result=cost_res,
+        select_cost=float(cost),
     )
     _record(
         report, op, instr, None, loop, rejected=rejected, oracle_min_cost=oracle_min_cost, gap=gap
@@ -258,7 +274,7 @@ def check_constraint(
        operand A says nothing about operand B;
     3. an evaluator is available and does not return exactly `True` — the
        predicate language is fail-closed (`evaluate` returns `False` or
-       `"unknown"` for anything it cannot decide, FR-017), and `"unknown"` here
+ `"unknown"` for anything it cannot decide,), and `"unknown"` here
        is a violation rather than a pass.
     """
     if not instr.constraint:
@@ -314,11 +330,11 @@ def assemble(
       limitation of the target ISA.
 
     `selector` defaults to `isa.select.select` when that module is importable
-    (`select(schema, kind, descriptor, tile, env) -> SelectionReport`, contracts/
-    selector.md), so the real pipeline passes nothing and a test passes a stub.
+    (`select(schema, kind, descriptor, tile, env) -> SelectionReport`), so the
+    real pipeline passes nothing and a test passes a stub.
 
     `env` is the launch environment the schema's symbolic terms resolve against
-    (`qc.corpus.launch_env(tier)`, declared in `fixtures/launch_env.json`). It is
+    (declared in `fixtures/launch_env.json`). It is
     threaded into selection and costing because without it every symbolic
     predicate is `unknown` — selection fail-closes to the conservative variant,
     or to `UNSUPPORTED`, which reads as an ISA limitation that is really a
@@ -352,7 +368,10 @@ def assemble(
             continue  # re-threading / return / kernel definition: not an instruction
 
         if op.name == FOR_OP and item.loop_id is None and not item.nested:
-            loop = _make_loop(by_op[id(op)], loop_ids[id(op)])
+            dropped = frozenset(
+                j for (loop_op_id, j) in getattr(annotations, "subsumed_loop_slots", frozenset()) if loop_op_id == id(op)
+            )
+            loop = _make_loop(by_op[id(op)], loop_ids[id(op)], dropped)
             loops.append(loop)
             loop_bodies[loop.id] = []
             # The loop's induction variable, its `iter_args` and the values it
@@ -366,7 +385,7 @@ def assemble(
         if item.nested or op.name == FOR_OP:
             reason = (
                 "nested scf.for: the program format has no nested loop, and flattening "
-                "it would hoist its body out of the region it belongs to (T-4)"
+                "it would hoist its body out of the region it belongs to"
                 if op.name == FOR_OP
                 else "inside a nested scf.for; not representable, and not hoisted"
             )
@@ -419,7 +438,7 @@ def total_cost(loops: list[Loop], instrs: list[Instr], epilogue: list[Instr]) ->
     """`Program.total_cost` for a set of containers not yet in a `Program`.
 
     `math.fsum`, matching `Program.cost_sum`, so assembly and validation cannot
-    disagree in the last bit (FR-004).
+    disagree in the last bit.
     """
     return math.fsum(
         [instr.cost for loop in loops for instr in loop.instrs]
@@ -428,18 +447,28 @@ def total_cost(loops: list[Loop], instrs: list[Instr], epilogue: list[Instr]) ->
     )
 
 
-def _make_loop(info, loop_id: int) -> Loop:
+def _make_loop(info, loop_id: int, dropped: frozenset[int] = frozenset()) -> Loop:
+    """The emitted `Loop`, minus loop-carried slots whose value is a subsumed pointer chain.
+
+    A dropped slot carried an address that the memory descriptors already encode
+    (base, strides, loop increment), so its initialiser, increment and yield were
+    elided upstream; keeping the slot would name values no instruction defines.
+    """
     op = info.op
+
+    def keep(values):
+        return tuple(v for j, v in enumerate(values) if j not in dropped)
+
     return Loop(
         id=loop_id,
         induction_var=info.iv.name if info.iv is not None else None,
         lower=None if info.lower is None else SsaRef(info.lower.name),
         upper=None if info.upper is None else SsaRef(info.upper.name),
         step=None if info.step is None else SsaRef(info.step.name),
-        iter_args=tuple(value.name for value in info.iter_args),
-        inits=tuple(value.name for value in info.inits),
-        results=tuple(value.name for value in info.results),
-        yields=tuple(value.name for value in info.yields),
+        iter_args=tuple(value.name for value in keep(info.iter_args)),
+        inits=tuple(value.name for value in keep(info.inits)),
+        results=tuple(value.name for value in keep(info.results)),
+        yields=tuple(value.name for value in keep(info.yields)),
         body=(),
         source=SourceRef.of(op),
     )
@@ -524,10 +553,10 @@ def _unavailable(
 
     A value whose producer exists but was not lowered is a *propagating*
     limitation: the consumer becomes `UNSUPPORTED` too, so the frontier is
-    reported instead of being papered over (FR-005). A value the module does not
+    reported instead of being papered over. A value the module does not
     define at all is an annotation bug and is raised, because no amount of
     marking makes it right — that is an operand reference nothing can ever
-    satisfy (`contracts/assembler.md` failure-mode 3, one layer up).
+    satisfy, one layer up.
     """
     missing: list[str] = []
     for role, operand in sorted(binding.operands.items()):
@@ -574,17 +603,17 @@ def _select(
 ) -> tuple[Binding | None, dict]:
     """Fill in `binding.instruction` when the recogniser did not choose one.
 
-    Assembly drives selection (method of record, §Backend assembly; contracts/
-    selector.md postcondition 6), so this is where FR-018's rejection reasons and
-    SC-005's oracle gap arrive. An unannotated operation is *not* selected for: it
-    is the method's explicit `UNSUPPORTED(<op name>)` case, and running a selector
-    over "nothing was recognised" would invent a lowering for it.
+    Assembly drives selection, so this is where a rejected candidate's
+    rejection reasons and the oracle gap arrive. An unannotated operation is
+    *not* selected for: it is the method's explicit `UNSUPPORTED(<op name>)`
+    case, and running a selector over "nothing was recognised" would invent a
+    lowering for it.
 
     Returns the binding **and the evidence**, rather than recording the evidence
     itself. Recording here was the first version, and it produced two records per
     selected operation — one carrying the rejected candidates with no
     instruction, one carrying the instruction with no rejections — so a reader
-    could not tell which choice the rejections belonged to (FR-018). The caller
+    could not tell which choice the rejections belonged to. The caller
     now attaches the evidence to the instruction it belongs to.
     """
     if binding is None or binding.instruction is not None:
@@ -596,8 +625,8 @@ def _select(
         # `None` would ask it to cost an access nobody described — with a schema
         # that registers its constraints, the selector answers, and an
         # instruction is emitted for an operand the recogniser explicitly could
-        # not read. Found by writing Track C: every `Unstructured` operand turned
-        # into a lowered instruction.
+        # not read. Found by writing the recognizer: every `Unstructured` operand
+        # turned into a lowered instruction.
         return binding, _NO_EVIDENCE
     if not binding.kind:
         raise AssemblyError(
@@ -622,15 +651,15 @@ def _select(
         from ..isa.schema import set_active_schema
 
         set_active_schema(getattr(schema, "name", "tritonflow1"))
-    except Exception:  # pragma: no cover - stand-in schemas have no name hook
+    except (ImportError, AttributeError, KeyError):  # stand-in schemas have no name hook
         pass
     chosen = getattr(selection, "chosen", None)
     chosen_name = _instruction_name(chosen)
     chosen_cost = getattr(selection, "chosen_cost", None)
     # Every candidate *except the chosen one* is evidence, whether it was refused
-    # by its own predicate or merely cost more: `contracts/selector.md`'s table
-    # expects `DMA1D` to be "rejected with `cost(1.00*words) > 0.60*words`", and
-    # FR-018 wants the rejection recorded rather than the alternative dropped.
+    # by its own predicate or merely cost more: e.g. `DMA1D` is "rejected with
+    # `cost(1.00*words) > 0.60*words`", and the rejection is recorded rather
+    # than the alternative being dropped.
     rejected = tuple(
         f"{_candidate_name(c)}: {_candidate_reason(c, chosen_cost)}"
         for c in getattr(selection, "candidates", ())
@@ -757,15 +786,15 @@ def _positional_arity(callable_: object) -> int | None:
 
 
 def _default_selector() -> object | None:
-    """`isa.select.select` if Track D has landed, else `None`.
+    """`isa.select.select` if the `isa` package is importable, else `None`.
 
-    Imported lazily and tolerated missing on purpose: every track must be
-    exercisable before its neighbours land (`parallelism.md` discipline 1), so a
-    test that supplies its own selector must not need `isa/` to exist.
+    Imported lazily and tolerated missing on purpose: every layer must be
+    exercisable before its neighbours land, so a test that supplies its own
+    selector must not need `isa/` to exist.
     """
     try:
         from ..isa.select import select
-    except Exception:  # pragma: no cover - the state until Track D lands
+    except ImportError:  # pragma: no cover - state before isa/select.py exists
         return None
     return select
 
@@ -832,7 +861,7 @@ def _constraint_operand(binding: Binding | None) -> object | None:
 def _constraint_text(value: object | None) -> str | None:
     """The instruction's constraint as *text*.
 
-    `contracts/isa-schema.md` types a schema's constraint as a `Predicate`,
+    The schema types a constraint as a `Predicate`,
     which carries its own authoritative text; the frozen stand-in stores a plain
     string. `Instr.constraint` is `str | None` — that is what the serialiser
     writes and the deserialiser parses back — so the coercion belongs here, at
@@ -854,14 +883,14 @@ def _constraint_text(value: object | None) -> str | None:
     raise AssemblyError(
         f"a schema constraint must be text or carry it (a parsed predicate), got "
         f"{type(value).__name__}; carrying a non-text constraint would serialise to a "
-        "program the deserialiser cannot read back (FR-020)"
+        "program the deserialiser cannot read back"
     )
 
 
 def _constraint_key(operand: object | None) -> str:
     """The identity a constraint is checked against.
 
-    An `Operand` by `operand_key`, a Track C descriptor by its canonical
+    An `Operand` by `operand_key`, a recognizer descriptor by its canonical
     `descriptor_key()`. Both are text, so the two paths cannot silently compare
     different kinds of thing.
     """
@@ -888,7 +917,7 @@ def _place(
 
 
 def _is_epilogue(op: Operation, loop_lines: list[int]) -> bool:
-    """Post-loop (EC-076, EC-079).
+    """Post-loop.
 
     "Post-loop" is a *position*, not a dataflow relation: every operation after
     the last `scf.for` is epilogue, whether or not it reads a loop result
