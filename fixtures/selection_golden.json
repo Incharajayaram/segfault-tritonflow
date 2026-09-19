@@ -1,0 +1,1410 @@
+{
+  "schema_version": 1,
+  "selections": {
+    "tritonflow1": {
+      "t0_vecadd": {
+        "instructions": [
+          {
+            "col": 5,
+            "defs": [
+              "%x_5"
+            ],
+            "instruction": "DMA1D",
+            "line": 18,
+            "loc": "x",
+            "loop": null,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%y_7"
+            ],
+            "instruction": "DMA1D",
+            "line": 21,
+            "loc": "y",
+            "loop": null,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%2"
+            ],
+            "instruction": "EPI_ADD",
+            "line": 24,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.addf"
+          },
+          {
+            "col": 5,
+            "defs": [],
+            "instruction": "DMA1D",
+            "line": 25,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "tt.store"
+          }
+        ],
+        "markers": []
+      },
+      "t1_matmul": {
+        "instructions": [
+          {
+            "col": 5,
+            "defs": [
+              "%c31_i32"
+            ],
+            "instruction": "MOVI",
+            "line": 16,
+            "loc": "callsite(#loc1 at #loc2)",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%acc"
+            ],
+            "instruction": "MOVI",
+            "line": 17,
+            "loc": "callsite(#loc3 at #loc55)",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c1_i32"
+            ],
+            "instruction": "MOVI",
+            "line": 18,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c0_i32"
+            ],
+            "instruction": "MOVI",
+            "line": 19,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c32_i32"
+            ],
+            "instruction": "MOVI",
+            "line": 20,
+            "loc": "unknown",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%0"
+            ],
+            "instruction": "EPI_ADD",
+            "line": 54,
+            "loc": "callsite(#loc26 at #loc2)",
+            "loop": null,
+            "source_op": "arith.addi"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%1"
+            ],
+            "instruction": "EPI_DIV",
+            "line": 55,
+            "loc": "callsite(#loc27 at #loc2)",
+            "loop": null,
+            "source_op": "arith.divsi"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%a"
+            ],
+            "instruction": "DMA2D",
+            "line": 57,
+            "loc": "a",
+            "loop": 0,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%b"
+            ],
+            "instruction": "DMA2D",
+            "line": 58,
+            "loc": "b",
+            "loop": 0,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%acc_37"
+            ],
+            "instruction": "MAC16",
+            "line": 59,
+            "loc": "acc",
+            "loop": 0,
+            "source_op": "tt.dot"
+          },
+          {
+            "col": 5,
+            "defs": [],
+            "instruction": "DMA2D",
+            "line": 77,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "tt.store"
+          }
+        ],
+        "markers": []
+      },
+      "t2_matmul_relu": {
+        "instructions": [
+          {
+            "col": 5,
+            "defs": [
+              "%c31_i32"
+            ],
+            "instruction": "MOVI",
+            "line": 17,
+            "loc": "callsite(#loc1 at #loc2)",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c1_i32"
+            ],
+            "instruction": "MOVI",
+            "line": 18,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c0_i32"
+            ],
+            "instruction": "MOVI",
+            "line": 19,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%cst"
+            ],
+            "instruction": "MOVI",
+            "line": 20,
+            "loc": "unknown",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c32_i32"
+            ],
+            "instruction": "MOVI",
+            "line": 21,
+            "loc": "unknown",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%0"
+            ],
+            "instruction": "EPI_ADD",
+            "line": 55,
+            "loc": "callsite(#loc24 at #loc2)",
+            "loop": null,
+            "source_op": "arith.addi"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%1"
+            ],
+            "instruction": "EPI_DIV",
+            "line": 56,
+            "loc": "callsite(#loc25 at #loc2)",
+            "loop": null,
+            "source_op": "arith.divsi"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%acc_41"
+            ],
+            "instruction": "DMA2D",
+            "line": 58,
+            "loc": "acc",
+            "loop": 0,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%acc_42"
+            ],
+            "instruction": "DMA2D",
+            "line": 59,
+            "loc": "acc",
+            "loop": 0,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%acc_43"
+            ],
+            "instruction": "MAC16",
+            "line": 60,
+            "loc": "acc",
+            "loop": 0,
+            "source_op": "tt.dot"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%bias_26"
+            ],
+            "instruction": "DMA1D",
+            "line": 71,
+            "loc": "bias",
+            "loop": null,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%out"
+            ],
+            "instruction": "EPI_EXPAND_DIMS",
+            "line": 72,
+            "loc": "out",
+            "loop": null,
+            "source_op": "tt.expand_dims"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%out_27"
+            ],
+            "instruction": "EPI_BROADCAST",
+            "line": 73,
+            "loc": "out",
+            "loop": null,
+            "source_op": "tt.broadcast"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%out_28"
+            ],
+            "instruction": "EPI_ADD",
+            "line": 74,
+            "loc": "out",
+            "loop": null,
+            "source_op": "arith.addf"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%out_29"
+            ],
+            "instruction": "EPI_MAX",
+            "line": 75,
+            "loc": "out",
+            "loop": null,
+            "source_op": "arith.maxnumf"
+          },
+          {
+            "col": 5,
+            "defs": [],
+            "instruction": "DMA2D",
+            "line": 85,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "tt.store"
+          }
+        ],
+        "markers": []
+      },
+      "t3_modulo": {
+        "instructions": [
+          {
+            "col": 5,
+            "defs": [
+              "%rm"
+            ],
+            "instruction": "MOVI",
+            "line": 12,
+            "loc": "rm",
+            "loop": null,
+            "source_op": "arith.constant"
+          }
+        ],
+        "markers": [
+          "UNSUPPORTED(tt.make_range at tt.make_range@13:5 loc(rm)): no elementwise instruction is admissible for this operand (11 candidate(s) rejected: EPI_ADD: op mismatch: tt.make_range not in ['addf', 'addi']; EPI_SUB: op mismatch: tt.make_range not in ['subf', 'subi']; EPI_MUL: op mismatch: tt.make_range not in ['mulf', 'muli']; EPI_DIV: op mismatch: tt.make_range not in ['divf', 'divsi', 'divui']; EPI_NEG: op mismatch: tt.make_range not in ['negf']; EPI_ABS: op mismatch: tt.make_range not in ['absf']; EPI_MAX: op mismatch: tt.make_range not in ['maxnumf', 'maxsi', 'maxui']; EPI_MIN: op mismatch: tt.make_range not in ['minnumf', 'minsi', 'minui']; MOVI: op mismatch: tt.make_range not in ['constant']; EPI_EXPAND_DIMS: op mismatch: tt.make_range not in ['expand_dims']; EPI_BROADCAST: op mismatch: tt.make_range not in ['broadcast'])",
+          "UNSUPPORTED(arith.addi at arith.addi@14:5 loc(rm)): operand(s) unavailable because the operation that produces them was not lowered: %rm_0; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.splat at tt.splat@15:5 loc(rm)): no elementwise instruction is admissible for this operand (11 candidate(s) rejected: EPI_ADD: op mismatch: tt.splat not in ['addf', 'addi']; EPI_SUB: op mismatch: tt.splat not in ['subf', 'subi']; EPI_MUL: op mismatch: tt.splat not in ['mulf', 'muli']; EPI_DIV: op mismatch: tt.splat not in ['divf', 'divsi', 'divui']; EPI_NEG: op mismatch: tt.splat not in ['negf']; EPI_ABS: op mismatch: tt.splat not in ['absf']; EPI_MAX: op mismatch: tt.splat not in ['maxnumf', 'maxsi', 'maxui']; EPI_MIN: op mismatch: tt.splat not in ['minnumf', 'minsi', 'minui']; MOVI: op mismatch: tt.splat not in ['constant']; EPI_EXPAND_DIMS: op mismatch: tt.splat not in ['expand_dims']; EPI_BROADCAST: op mismatch: tt.splat not in ['broadcast'])",
+          "UNSUPPORTED(arith.remsi at arith.remsi@16:5 loc(rm)): no elementwise instruction is admissible for this operand (11 candidate(s) rejected: EPI_ADD: op mismatch: arith.remsi not in ['addf', 'addi']; EPI_SUB: op mismatch: arith.remsi not in ['subf', 'subi']; EPI_MUL: op mismatch: arith.remsi not in ['mulf', 'muli']; EPI_DIV: op mismatch: arith.remsi not in ['divf', 'divsi', 'divui']; EPI_NEG: op mismatch: arith.remsi not in ['negf']; EPI_ABS: op mismatch: arith.remsi not in ['absf']; EPI_MAX: op mismatch: arith.remsi not in ['maxnumf', 'maxsi', 'maxui']; EPI_MIN: op mismatch: arith.remsi not in ['minnumf', 'minsi', 'minui']; MOVI: op mismatch: arith.remsi not in ['constant']; EPI_EXPAND_DIMS: op mismatch: arith.remsi not in ['expand_dims']; EPI_BROADCAST: op mismatch: arith.remsi not in ['broadcast'])",
+          "UNSUPPORTED(tt.expand_dims at tt.expand_dims@17:5 loc(x)): operand(s) unavailable because the operation that produces them was not lowered: %rm_3; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.splat at tt.splat@18:5 loc(x)): no elementwise instruction is admissible for this operand (11 candidate(s) rejected: EPI_ADD: op mismatch: tt.splat not in ['addf', 'addi']; EPI_SUB: op mismatch: tt.splat not in ['subf', 'subi']; EPI_MUL: op mismatch: tt.splat not in ['mulf', 'muli']; EPI_DIV: op mismatch: tt.splat not in ['divf', 'divsi', 'divui']; EPI_NEG: op mismatch: tt.splat not in ['negf']; EPI_ABS: op mismatch: tt.splat not in ['absf']; EPI_MAX: op mismatch: tt.splat not in ['maxnumf', 'maxsi', 'maxui']; EPI_MIN: op mismatch: tt.splat not in ['minnumf', 'minsi', 'minui']; MOVI: op mismatch: tt.splat not in ['constant']; EPI_EXPAND_DIMS: op mismatch: tt.splat not in ['expand_dims']; EPI_BROADCAST: op mismatch: tt.splat not in ['broadcast'])",
+          "UNSUPPORTED(arith.muli at arith.muli@19:5 loc(x)): operand(s) unavailable because the operation that produces them was not lowered: %x, %x_4; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.expand_dims at tt.expand_dims@20:5 loc(x)): operand(s) unavailable because the operation that produces them was not lowered: %rm_0; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.splat at tt.splat@21:5 loc(x)): no elementwise instruction is admissible for this operand (11 candidate(s) rejected: EPI_ADD: op mismatch: tt.splat not in ['addf', 'addi']; EPI_SUB: op mismatch: tt.splat not in ['subf', 'subi']; EPI_MUL: op mismatch: tt.splat not in ['mulf', 'muli']; EPI_DIV: op mismatch: tt.splat not in ['divf', 'divsi', 'divui']; EPI_NEG: op mismatch: tt.splat not in ['negf']; EPI_ABS: op mismatch: tt.splat not in ['absf']; EPI_MAX: op mismatch: tt.splat not in ['maxnumf', 'maxsi', 'maxui']; EPI_MIN: op mismatch: tt.splat not in ['minnumf', 'minsi', 'minui']; MOVI: op mismatch: tt.splat not in ['constant']; EPI_EXPAND_DIMS: op mismatch: tt.splat not in ['expand_dims']; EPI_BROADCAST: op mismatch: tt.splat not in ['broadcast'])",
+          "UNSUPPORTED(arith.muli at arith.muli@22:5 loc(x)): operand(s) unavailable because the operation that produces them was not lowered: %x_6, %x_7; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.broadcast at tt.broadcast@23:5 loc(x)): operand(s) unavailable because the operation that produces them was not lowered: %x_5; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.broadcast at tt.broadcast@24:5 loc(x)): operand(s) unavailable because the operation that produces them was not lowered: %x_8; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(arith.addi at arith.addi@25:5 loc(x)): operand(s) unavailable because the operation that produces them was not lowered: %x_10, %x_9; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.splat at tt.splat@26:5 loc(x)): no elementwise instruction is admissible for this operand (11 candidate(s) rejected: EPI_ADD: op mismatch: tt.splat not in ['addf', 'addi']; EPI_SUB: op mismatch: tt.splat not in ['subf', 'subi']; EPI_MUL: op mismatch: tt.splat not in ['mulf', 'muli']; EPI_DIV: op mismatch: tt.splat not in ['divf', 'divsi', 'divui']; EPI_NEG: op mismatch: tt.splat not in ['negf']; EPI_ABS: op mismatch: tt.splat not in ['absf']; EPI_MAX: op mismatch: tt.splat not in ['maxnumf', 'maxsi', 'maxui']; EPI_MIN: op mismatch: tt.splat not in ['minnumf', 'minsi', 'minui']; MOVI: op mismatch: tt.splat not in ['constant']; EPI_EXPAND_DIMS: op mismatch: tt.splat not in ['expand_dims']; EPI_BROADCAST: op mismatch: tt.splat not in ['broadcast'])",
+          "UNSUPPORTED(tt.addptr at tt.addptr@27:5 loc(x)): no elementwise instruction is admissible for this operand (11 candidate(s) rejected: EPI_ADD: op mismatch: tt.addptr not in ['addf', 'addi']; EPI_SUB: op mismatch: tt.addptr not in ['subf', 'subi']; EPI_MUL: op mismatch: tt.addptr not in ['mulf', 'muli']; EPI_DIV: op mismatch: tt.addptr not in ['divf', 'divsi', 'divui']; EPI_NEG: op mismatch: tt.addptr not in ['negf']; EPI_ABS: op mismatch: tt.addptr not in ['absf']; EPI_MAX: op mismatch: tt.addptr not in ['maxnumf', 'maxsi', 'maxui']; EPI_MIN: op mismatch: tt.addptr not in ['minnumf', 'minsi', 'minui']; MOVI: op mismatch: tt.addptr not in ['constant']; EPI_EXPAND_DIMS: op mismatch: tt.addptr not in ['expand_dims']; EPI_BROADCAST: op mismatch: tt.addptr not in ['broadcast'])",
+          "UNSUPPORTED(tt.load at tt.load@28:5 loc(x)): unstructured access at %x_13: modulo wraparound",
+          "UNSUPPORTED(tt.splat at tt.splat@29:5 loc(LOCFILE)): no elementwise instruction is admissible for this operand (11 candidate(s) rejected: EPI_ADD: op mismatch: tt.splat not in ['addf', 'addi']; EPI_SUB: op mismatch: tt.splat not in ['subf', 'subi']; EPI_MUL: op mismatch: tt.splat not in ['mulf', 'muli']; EPI_DIV: op mismatch: tt.splat not in ['divf', 'divsi', 'divui']; EPI_NEG: op mismatch: tt.splat not in ['negf']; EPI_ABS: op mismatch: tt.splat not in ['absf']; EPI_MAX: op mismatch: tt.splat not in ['maxnumf', 'maxsi', 'maxui']; EPI_MIN: op mismatch: tt.splat not in ['minnumf', 'minsi', 'minui']; MOVI: op mismatch: tt.splat not in ['constant']; EPI_EXPAND_DIMS: op mismatch: tt.splat not in ['expand_dims']; EPI_BROADCAST: op mismatch: tt.splat not in ['broadcast'])",
+          "UNSUPPORTED(arith.muli at arith.muli@30:5 loc(LOCFILE)): operand(s) unavailable because the operation that produces them was not lowered: %0, %x; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.splat at tt.splat@31:5 loc(LOCFILE)): no elementwise instruction is admissible for this operand (11 candidate(s) rejected: EPI_ADD: op mismatch: tt.splat not in ['addf', 'addi']; EPI_SUB: op mismatch: tt.splat not in ['subf', 'subi']; EPI_MUL: op mismatch: tt.splat not in ['mulf', 'muli']; EPI_DIV: op mismatch: tt.splat not in ['divf', 'divsi', 'divui']; EPI_NEG: op mismatch: tt.splat not in ['negf']; EPI_ABS: op mismatch: tt.splat not in ['absf']; EPI_MAX: op mismatch: tt.splat not in ['maxnumf', 'maxsi', 'maxui']; EPI_MIN: op mismatch: tt.splat not in ['minnumf', 'minsi', 'minui']; MOVI: op mismatch: tt.splat not in ['constant']; EPI_EXPAND_DIMS: op mismatch: tt.splat not in ['expand_dims']; EPI_BROADCAST: op mismatch: tt.splat not in ['broadcast'])",
+          "UNSUPPORTED(arith.muli at arith.muli@32:5 loc(LOCFILE)): operand(s) unavailable because the operation that produces them was not lowered: %2, %x_6; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.broadcast at tt.broadcast@33:5 loc(LOCFILE)): operand(s) unavailable because the operation that produces them was not lowered: %1; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.broadcast at tt.broadcast@34:5 loc(LOCFILE)): operand(s) unavailable because the operation that produces them was not lowered: %3; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(arith.addi at arith.addi@35:5 loc(LOCFILE)): operand(s) unavailable because the operation that produces them was not lowered: %4, %5; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.splat at tt.splat@36:5 loc(LOCFILE)): no elementwise instruction is admissible for this operand (11 candidate(s) rejected: EPI_ADD: op mismatch: tt.splat not in ['addf', 'addi']; EPI_SUB: op mismatch: tt.splat not in ['subf', 'subi']; EPI_MUL: op mismatch: tt.splat not in ['mulf', 'muli']; EPI_DIV: op mismatch: tt.splat not in ['divf', 'divsi', 'divui']; EPI_NEG: op mismatch: tt.splat not in ['negf']; EPI_ABS: op mismatch: tt.splat not in ['absf']; EPI_MAX: op mismatch: tt.splat not in ['maxnumf', 'maxsi', 'maxui']; EPI_MIN: op mismatch: tt.splat not in ['minnumf', 'minsi', 'minui']; MOVI: op mismatch: tt.splat not in ['constant']; EPI_EXPAND_DIMS: op mismatch: tt.splat not in ['expand_dims']; EPI_BROADCAST: op mismatch: tt.splat not in ['broadcast'])",
+          "UNSUPPORTED(tt.addptr at tt.addptr@37:5 loc(LOCFILE)): no elementwise instruction is admissible for this operand (11 candidate(s) rejected: EPI_ADD: op mismatch: tt.addptr not in ['addf', 'addi']; EPI_SUB: op mismatch: tt.addptr not in ['subf', 'subi']; EPI_MUL: op mismatch: tt.addptr not in ['mulf', 'muli']; EPI_DIV: op mismatch: tt.addptr not in ['divf', 'divsi', 'divui']; EPI_NEG: op mismatch: tt.addptr not in ['negf']; EPI_ABS: op mismatch: tt.addptr not in ['absf']; EPI_MAX: op mismatch: tt.addptr not in ['maxnumf', 'maxsi', 'maxui']; EPI_MIN: op mismatch: tt.addptr not in ['minnumf', 'minsi', 'minui']; MOVI: op mismatch: tt.addptr not in ['constant']; EPI_EXPAND_DIMS: op mismatch: tt.addptr not in ['expand_dims']; EPI_BROADCAST: op mismatch: tt.addptr not in ['broadcast'])",
+          "UNSUPPORTED(tt.store at tt.store@38:5 loc(LOCFILE)): unstructured access at %8: modulo wraparound"
+        ]
+      }
+    },
+    "tritonflow2": {
+      "t0_vecadd": {
+        "instructions": [
+          {
+            "col": 5,
+            "defs": [
+              "%x_5"
+            ],
+            "instruction": "LDG",
+            "line": 18,
+            "loc": "x",
+            "loop": null,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%y_7"
+            ],
+            "instruction": "LDG",
+            "line": 21,
+            "loc": "y",
+            "loop": null,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%2"
+            ],
+            "instruction": "VPU_ADD",
+            "line": 24,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.addf"
+          },
+          {
+            "col": 5,
+            "defs": [],
+            "instruction": "LDG",
+            "line": 25,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "tt.store"
+          }
+        ],
+        "markers": []
+      },
+      "t1_matmul": {
+        "instructions": [
+          {
+            "col": 5,
+            "defs": [
+              "%c31_i32"
+            ],
+            "instruction": "MOVI",
+            "line": 16,
+            "loc": "callsite(#loc1 at #loc2)",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%acc"
+            ],
+            "instruction": "MOVI",
+            "line": 17,
+            "loc": "callsite(#loc3 at #loc55)",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c1_i32"
+            ],
+            "instruction": "MOVI",
+            "line": 18,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c0_i32"
+            ],
+            "instruction": "MOVI",
+            "line": 19,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c32_i32"
+            ],
+            "instruction": "MOVI",
+            "line": 20,
+            "loc": "unknown",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%0"
+            ],
+            "instruction": "VPU_ADD",
+            "line": 54,
+            "loc": "callsite(#loc26 at #loc2)",
+            "loop": null,
+            "source_op": "arith.addi"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%1"
+            ],
+            "instruction": "VPU_DIV",
+            "line": 55,
+            "loc": "callsite(#loc27 at #loc2)",
+            "loop": null,
+            "source_op": "arith.divsi"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%a"
+            ],
+            "instruction": "LDS2D",
+            "line": 57,
+            "loc": "a",
+            "loop": 0,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%b"
+            ],
+            "instruction": "LDS2D",
+            "line": 58,
+            "loc": "b",
+            "loop": 0,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%acc_37"
+            ],
+            "instruction": "OPU32",
+            "line": 59,
+            "loc": "acc",
+            "loop": 0,
+            "source_op": "tt.dot"
+          },
+          {
+            "col": 5,
+            "defs": [],
+            "instruction": "LDS2D",
+            "line": 77,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "tt.store"
+          }
+        ],
+        "markers": []
+      },
+      "t2_matmul_relu": {
+        "instructions": [
+          {
+            "col": 5,
+            "defs": [
+              "%c31_i32"
+            ],
+            "instruction": "MOVI",
+            "line": 17,
+            "loc": "callsite(#loc1 at #loc2)",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c1_i32"
+            ],
+            "instruction": "MOVI",
+            "line": 18,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c0_i32"
+            ],
+            "instruction": "MOVI",
+            "line": 19,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%cst"
+            ],
+            "instruction": "MOVI",
+            "line": 20,
+            "loc": "unknown",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c32_i32"
+            ],
+            "instruction": "MOVI",
+            "line": 21,
+            "loc": "unknown",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%0"
+            ],
+            "instruction": "VPU_ADD",
+            "line": 55,
+            "loc": "callsite(#loc24 at #loc2)",
+            "loop": null,
+            "source_op": "arith.addi"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%1"
+            ],
+            "instruction": "VPU_DIV",
+            "line": 56,
+            "loc": "callsite(#loc25 at #loc2)",
+            "loop": null,
+            "source_op": "arith.divsi"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%acc_41"
+            ],
+            "instruction": "LDS2D",
+            "line": 58,
+            "loc": "acc",
+            "loop": 0,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%acc_42"
+            ],
+            "instruction": "LDS2D",
+            "line": 59,
+            "loc": "acc",
+            "loop": 0,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%acc_43"
+            ],
+            "instruction": "OPU32",
+            "line": 60,
+            "loc": "acc",
+            "loop": 0,
+            "source_op": "tt.dot"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%bias_26"
+            ],
+            "instruction": "LDG",
+            "line": 71,
+            "loc": "bias",
+            "loop": null,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%out"
+            ],
+            "instruction": "VPU_EXPAND_DIMS",
+            "line": 72,
+            "loc": "out",
+            "loop": null,
+            "source_op": "tt.expand_dims"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%out_27"
+            ],
+            "instruction": "VPU_BROADCAST",
+            "line": 73,
+            "loc": "out",
+            "loop": null,
+            "source_op": "tt.broadcast"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%out_28"
+            ],
+            "instruction": "VPU_ADD",
+            "line": 74,
+            "loc": "out",
+            "loop": null,
+            "source_op": "arith.addf"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%out_29"
+            ],
+            "instruction": "VPU_MAX",
+            "line": 75,
+            "loc": "out",
+            "loop": null,
+            "source_op": "arith.maxnumf"
+          },
+          {
+            "col": 5,
+            "defs": [],
+            "instruction": "LDS2D",
+            "line": 85,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "tt.store"
+          }
+        ],
+        "markers": []
+      },
+      "t3_modulo": {
+        "instructions": [
+          {
+            "col": 5,
+            "defs": [
+              "%rm"
+            ],
+            "instruction": "MOVI",
+            "line": 12,
+            "loc": "rm",
+            "loop": null,
+            "source_op": "arith.constant"
+          }
+        ],
+        "markers": [
+          "UNSUPPORTED(tt.make_range at tt.make_range@13:5 loc(rm)): no elementwise instruction is admissible for this operand (12 candidate(s) rejected: VPU_ADD: op mismatch: tt.make_range not in ['addf', 'addi']; VPU_SUB: op mismatch: tt.make_range not in ['subf', 'subi']; VPU_MUL: op mismatch: tt.make_range not in ['mulf', 'muli']; VPU_DIV: op mismatch: tt.make_range not in ['divf', 'divsi', 'divui']; VPU_NEG: op mismatch: tt.make_range not in ['negf']; VPU_ABS: op mismatch: tt.make_range not in ['absf']; VPU_MAX: op mismatch: tt.make_range not in ['maxnumf', 'maxsi', 'maxui']; VPU_MIN: op mismatch: tt.make_range not in ['minnumf', 'minsi', 'minui']; CLAMP: op mismatch: tt.make_range not in ['clamp']; MOVI: op mismatch: tt.make_range not in ['constant']; VPU_EXPAND_DIMS: op mismatch: tt.make_range not in ['expand_dims']; VPU_BROADCAST: op mismatch: tt.make_range not in ['broadcast'])",
+          "UNSUPPORTED(arith.addi at arith.addi@14:5 loc(rm)): operand(s) unavailable because the operation that produces them was not lowered: %rm_0; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.splat at tt.splat@15:5 loc(rm)): no elementwise instruction is admissible for this operand (12 candidate(s) rejected: VPU_ADD: op mismatch: tt.splat not in ['addf', 'addi']; VPU_SUB: op mismatch: tt.splat not in ['subf', 'subi']; VPU_MUL: op mismatch: tt.splat not in ['mulf', 'muli']; VPU_DIV: op mismatch: tt.splat not in ['divf', 'divsi', 'divui']; VPU_NEG: op mismatch: tt.splat not in ['negf']; VPU_ABS: op mismatch: tt.splat not in ['absf']; VPU_MAX: op mismatch: tt.splat not in ['maxnumf', 'maxsi', 'maxui']; VPU_MIN: op mismatch: tt.splat not in ['minnumf', 'minsi', 'minui']; CLAMP: op mismatch: tt.splat not in ['clamp']; MOVI: op mismatch: tt.splat not in ['constant']; VPU_EXPAND_DIMS: op mismatch: tt.splat not in ['expand_dims']; VPU_BROADCAST: op mismatch: tt.splat not in ['broadcast'])",
+          "UNSUPPORTED(arith.remsi at arith.remsi@16:5 loc(rm)): no elementwise instruction is admissible for this operand (12 candidate(s) rejected: VPU_ADD: op mismatch: arith.remsi not in ['addf', 'addi']; VPU_SUB: op mismatch: arith.remsi not in ['subf', 'subi']; VPU_MUL: op mismatch: arith.remsi not in ['mulf', 'muli']; VPU_DIV: op mismatch: arith.remsi not in ['divf', 'divsi', 'divui']; VPU_NEG: op mismatch: arith.remsi not in ['negf']; VPU_ABS: op mismatch: arith.remsi not in ['absf']; VPU_MAX: op mismatch: arith.remsi not in ['maxnumf', 'maxsi', 'maxui']; VPU_MIN: op mismatch: arith.remsi not in ['minnumf', 'minsi', 'minui']; CLAMP: op mismatch: arith.remsi not in ['clamp']; MOVI: op mismatch: arith.remsi not in ['constant']; VPU_EXPAND_DIMS: op mismatch: arith.remsi not in ['expand_dims']; VPU_BROADCAST: op mismatch: arith.remsi not in ['broadcast'])",
+          "UNSUPPORTED(tt.expand_dims at tt.expand_dims@17:5 loc(x)): operand(s) unavailable because the operation that produces them was not lowered: %rm_3; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.splat at tt.splat@18:5 loc(x)): no elementwise instruction is admissible for this operand (12 candidate(s) rejected: VPU_ADD: op mismatch: tt.splat not in ['addf', 'addi']; VPU_SUB: op mismatch: tt.splat not in ['subf', 'subi']; VPU_MUL: op mismatch: tt.splat not in ['mulf', 'muli']; VPU_DIV: op mismatch: tt.splat not in ['divf', 'divsi', 'divui']; VPU_NEG: op mismatch: tt.splat not in ['negf']; VPU_ABS: op mismatch: tt.splat not in ['absf']; VPU_MAX: op mismatch: tt.splat not in ['maxnumf', 'maxsi', 'maxui']; VPU_MIN: op mismatch: tt.splat not in ['minnumf', 'minsi', 'minui']; CLAMP: op mismatch: tt.splat not in ['clamp']; MOVI: op mismatch: tt.splat not in ['constant']; VPU_EXPAND_DIMS: op mismatch: tt.splat not in ['expand_dims']; VPU_BROADCAST: op mismatch: tt.splat not in ['broadcast'])",
+          "UNSUPPORTED(arith.muli at arith.muli@19:5 loc(x)): operand(s) unavailable because the operation that produces them was not lowered: %x, %x_4; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.expand_dims at tt.expand_dims@20:5 loc(x)): operand(s) unavailable because the operation that produces them was not lowered: %rm_0; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.splat at tt.splat@21:5 loc(x)): no elementwise instruction is admissible for this operand (12 candidate(s) rejected: VPU_ADD: op mismatch: tt.splat not in ['addf', 'addi']; VPU_SUB: op mismatch: tt.splat not in ['subf', 'subi']; VPU_MUL: op mismatch: tt.splat not in ['mulf', 'muli']; VPU_DIV: op mismatch: tt.splat not in ['divf', 'divsi', 'divui']; VPU_NEG: op mismatch: tt.splat not in ['negf']; VPU_ABS: op mismatch: tt.splat not in ['absf']; VPU_MAX: op mismatch: tt.splat not in ['maxnumf', 'maxsi', 'maxui']; VPU_MIN: op mismatch: tt.splat not in ['minnumf', 'minsi', 'minui']; CLAMP: op mismatch: tt.splat not in ['clamp']; MOVI: op mismatch: tt.splat not in ['constant']; VPU_EXPAND_DIMS: op mismatch: tt.splat not in ['expand_dims']; VPU_BROADCAST: op mismatch: tt.splat not in ['broadcast'])",
+          "UNSUPPORTED(arith.muli at arith.muli@22:5 loc(x)): operand(s) unavailable because the operation that produces them was not lowered: %x_6, %x_7; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.broadcast at tt.broadcast@23:5 loc(x)): operand(s) unavailable because the operation that produces them was not lowered: %x_5; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.broadcast at tt.broadcast@24:5 loc(x)): operand(s) unavailable because the operation that produces them was not lowered: %x_8; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(arith.addi at arith.addi@25:5 loc(x)): operand(s) unavailable because the operation that produces them was not lowered: %x_10, %x_9; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.splat at tt.splat@26:5 loc(x)): no elementwise instruction is admissible for this operand (12 candidate(s) rejected: VPU_ADD: op mismatch: tt.splat not in ['addf', 'addi']; VPU_SUB: op mismatch: tt.splat not in ['subf', 'subi']; VPU_MUL: op mismatch: tt.splat not in ['mulf', 'muli']; VPU_DIV: op mismatch: tt.splat not in ['divf', 'divsi', 'divui']; VPU_NEG: op mismatch: tt.splat not in ['negf']; VPU_ABS: op mismatch: tt.splat not in ['absf']; VPU_MAX: op mismatch: tt.splat not in ['maxnumf', 'maxsi', 'maxui']; VPU_MIN: op mismatch: tt.splat not in ['minnumf', 'minsi', 'minui']; CLAMP: op mismatch: tt.splat not in ['clamp']; MOVI: op mismatch: tt.splat not in ['constant']; VPU_EXPAND_DIMS: op mismatch: tt.splat not in ['expand_dims']; VPU_BROADCAST: op mismatch: tt.splat not in ['broadcast'])",
+          "UNSUPPORTED(tt.addptr at tt.addptr@27:5 loc(x)): no elementwise instruction is admissible for this operand (12 candidate(s) rejected: VPU_ADD: op mismatch: tt.addptr not in ['addf', 'addi']; VPU_SUB: op mismatch: tt.addptr not in ['subf', 'subi']; VPU_MUL: op mismatch: tt.addptr not in ['mulf', 'muli']; VPU_DIV: op mismatch: tt.addptr not in ['divf', 'divsi', 'divui']; VPU_NEG: op mismatch: tt.addptr not in ['negf']; VPU_ABS: op mismatch: tt.addptr not in ['absf']; VPU_MAX: op mismatch: tt.addptr not in ['maxnumf', 'maxsi', 'maxui']; VPU_MIN: op mismatch: tt.addptr not in ['minnumf', 'minsi', 'minui']; CLAMP: op mismatch: tt.addptr not in ['clamp']; MOVI: op mismatch: tt.addptr not in ['constant']; VPU_EXPAND_DIMS: op mismatch: tt.addptr not in ['expand_dims']; VPU_BROADCAST: op mismatch: tt.addptr not in ['broadcast'])",
+          "UNSUPPORTED(tt.load at tt.load@28:5 loc(x)): unstructured access at %x_13: modulo wraparound",
+          "UNSUPPORTED(tt.splat at tt.splat@29:5 loc(LOCFILE)): no elementwise instruction is admissible for this operand (12 candidate(s) rejected: VPU_ADD: op mismatch: tt.splat not in ['addf', 'addi']; VPU_SUB: op mismatch: tt.splat not in ['subf', 'subi']; VPU_MUL: op mismatch: tt.splat not in ['mulf', 'muli']; VPU_DIV: op mismatch: tt.splat not in ['divf', 'divsi', 'divui']; VPU_NEG: op mismatch: tt.splat not in ['negf']; VPU_ABS: op mismatch: tt.splat not in ['absf']; VPU_MAX: op mismatch: tt.splat not in ['maxnumf', 'maxsi', 'maxui']; VPU_MIN: op mismatch: tt.splat not in ['minnumf', 'minsi', 'minui']; CLAMP: op mismatch: tt.splat not in ['clamp']; MOVI: op mismatch: tt.splat not in ['constant']; VPU_EXPAND_DIMS: op mismatch: tt.splat not in ['expand_dims']; VPU_BROADCAST: op mismatch: tt.splat not in ['broadcast'])",
+          "UNSUPPORTED(arith.muli at arith.muli@30:5 loc(LOCFILE)): operand(s) unavailable because the operation that produces them was not lowered: %0, %x; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.splat at tt.splat@31:5 loc(LOCFILE)): no elementwise instruction is admissible for this operand (12 candidate(s) rejected: VPU_ADD: op mismatch: tt.splat not in ['addf', 'addi']; VPU_SUB: op mismatch: tt.splat not in ['subf', 'subi']; VPU_MUL: op mismatch: tt.splat not in ['mulf', 'muli']; VPU_DIV: op mismatch: tt.splat not in ['divf', 'divsi', 'divui']; VPU_NEG: op mismatch: tt.splat not in ['negf']; VPU_ABS: op mismatch: tt.splat not in ['absf']; VPU_MAX: op mismatch: tt.splat not in ['maxnumf', 'maxsi', 'maxui']; VPU_MIN: op mismatch: tt.splat not in ['minnumf', 'minsi', 'minui']; CLAMP: op mismatch: tt.splat not in ['clamp']; MOVI: op mismatch: tt.splat not in ['constant']; VPU_EXPAND_DIMS: op mismatch: tt.splat not in ['expand_dims']; VPU_BROADCAST: op mismatch: tt.splat not in ['broadcast'])",
+          "UNSUPPORTED(arith.muli at arith.muli@32:5 loc(LOCFILE)): operand(s) unavailable because the operation that produces them was not lowered: %2, %x_6; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.broadcast at tt.broadcast@33:5 loc(LOCFILE)): operand(s) unavailable because the operation that produces them was not lowered: %1; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.broadcast at tt.broadcast@34:5 loc(LOCFILE)): operand(s) unavailable because the operation that produces them was not lowered: %3; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(arith.addi at arith.addi@35:5 loc(LOCFILE)): operand(s) unavailable because the operation that produces them was not lowered: %4, %5; this instruction is marked UNSUPPORTED rather than emitted against a value the program never computes",
+          "UNSUPPORTED(tt.splat at tt.splat@36:5 loc(LOCFILE)): no elementwise instruction is admissible for this operand (12 candidate(s) rejected: VPU_ADD: op mismatch: tt.splat not in ['addf', 'addi']; VPU_SUB: op mismatch: tt.splat not in ['subf', 'subi']; VPU_MUL: op mismatch: tt.splat not in ['mulf', 'muli']; VPU_DIV: op mismatch: tt.splat not in ['divf', 'divsi', 'divui']; VPU_NEG: op mismatch: tt.splat not in ['negf']; VPU_ABS: op mismatch: tt.splat not in ['absf']; VPU_MAX: op mismatch: tt.splat not in ['maxnumf', 'maxsi', 'maxui']; VPU_MIN: op mismatch: tt.splat not in ['minnumf', 'minsi', 'minui']; CLAMP: op mismatch: tt.splat not in ['clamp']; MOVI: op mismatch: tt.splat not in ['constant']; VPU_EXPAND_DIMS: op mismatch: tt.splat not in ['expand_dims']; VPU_BROADCAST: op mismatch: tt.splat not in ['broadcast'])",
+          "UNSUPPORTED(tt.addptr at tt.addptr@37:5 loc(LOCFILE)): no elementwise instruction is admissible for this operand (12 candidate(s) rejected: VPU_ADD: op mismatch: tt.addptr not in ['addf', 'addi']; VPU_SUB: op mismatch: tt.addptr not in ['subf', 'subi']; VPU_MUL: op mismatch: tt.addptr not in ['mulf', 'muli']; VPU_DIV: op mismatch: tt.addptr not in ['divf', 'divsi', 'divui']; VPU_NEG: op mismatch: tt.addptr not in ['negf']; VPU_ABS: op mismatch: tt.addptr not in ['absf']; VPU_MAX: op mismatch: tt.addptr not in ['maxnumf', 'maxsi', 'maxui']; VPU_MIN: op mismatch: tt.addptr not in ['minnumf', 'minsi', 'minui']; CLAMP: op mismatch: tt.addptr not in ['clamp']; MOVI: op mismatch: tt.addptr not in ['constant']; VPU_EXPAND_DIMS: op mismatch: tt.addptr not in ['expand_dims']; VPU_BROADCAST: op mismatch: tt.addptr not in ['broadcast'])",
+          "UNSUPPORTED(tt.store at tt.store@38:5 loc(LOCFILE)): unstructured access at %8: modulo wraparound"
+        ]
+      }
+    },
+    "vortex_rvgpu": {
+      "t0_vecadd": {
+        "instructions": [
+          {
+            "col": 5,
+            "defs": [
+              "%x_5"
+            ],
+            "instruction": "LDG",
+            "line": 18,
+            "loc": "x",
+            "loop": null,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%y_7"
+            ],
+            "instruction": "LDG",
+            "line": 21,
+            "loc": "y",
+            "loop": null,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%2"
+            ],
+            "instruction": "VADD",
+            "line": 24,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.addf"
+          },
+          {
+            "col": 5,
+            "defs": [],
+            "instruction": "STG",
+            "line": 25,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "tt.store"
+          }
+        ],
+        "markers": []
+      },
+      "t1_matmul": {
+        "instructions": [
+          {
+            "col": 5,
+            "defs": [
+              "%c31_i32"
+            ],
+            "instruction": "LI",
+            "line": 16,
+            "loc": "callsite(#loc1 at #loc2)",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%acc"
+            ],
+            "instruction": "LI",
+            "line": 17,
+            "loc": "callsite(#loc3 at #loc55)",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c1_i32"
+            ],
+            "instruction": "LI",
+            "line": 18,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c0_i32"
+            ],
+            "instruction": "LI",
+            "line": 19,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c32_i32"
+            ],
+            "instruction": "LI",
+            "line": 20,
+            "loc": "unknown",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%0"
+            ],
+            "instruction": "VADD",
+            "line": 54,
+            "loc": "callsite(#loc26 at #loc2)",
+            "loop": null,
+            "source_op": "arith.addi"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%1"
+            ],
+            "instruction": "VDIV",
+            "line": 55,
+            "loc": "callsite(#loc27 at #loc2)",
+            "loop": null,
+            "source_op": "arith.divsi"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%a"
+            ],
+            "instruction": "LDS",
+            "line": 57,
+            "loc": "a",
+            "loop": 0,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%b"
+            ],
+            "instruction": "LDS",
+            "line": 58,
+            "loc": "b",
+            "loop": 0,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%acc_37"
+            ],
+            "instruction": "TCU_WGMMA32",
+            "line": 59,
+            "loc": "acc",
+            "loop": 0,
+            "source_op": "tt.dot"
+          },
+          {
+            "col": 5,
+            "defs": [],
+            "instruction": "STS",
+            "line": 77,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "tt.store"
+          }
+        ],
+        "markers": []
+      },
+      "t2_matmul_relu": {
+        "instructions": [
+          {
+            "col": 5,
+            "defs": [
+              "%c31_i32"
+            ],
+            "instruction": "LI",
+            "line": 17,
+            "loc": "callsite(#loc1 at #loc2)",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c1_i32"
+            ],
+            "instruction": "LI",
+            "line": 18,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c0_i32"
+            ],
+            "instruction": "LI",
+            "line": 19,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%cst"
+            ],
+            "instruction": "LI",
+            "line": 20,
+            "loc": "unknown",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%c32_i32"
+            ],
+            "instruction": "LI",
+            "line": 21,
+            "loc": "unknown",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%0"
+            ],
+            "instruction": "VADD",
+            "line": 55,
+            "loc": "callsite(#loc24 at #loc2)",
+            "loop": null,
+            "source_op": "arith.addi"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%1"
+            ],
+            "instruction": "VDIV",
+            "line": 56,
+            "loc": "callsite(#loc25 at #loc2)",
+            "loop": null,
+            "source_op": "arith.divsi"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%acc_41"
+            ],
+            "instruction": "LDS",
+            "line": 58,
+            "loc": "acc",
+            "loop": 0,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%acc_42"
+            ],
+            "instruction": "LDS",
+            "line": 59,
+            "loc": "acc",
+            "loop": 0,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 7,
+            "defs": [
+              "%acc_43"
+            ],
+            "instruction": "TCU_WGMMA32",
+            "line": 60,
+            "loc": "acc",
+            "loop": 0,
+            "source_op": "tt.dot"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%bias_26"
+            ],
+            "instruction": "LDG",
+            "line": 71,
+            "loc": "bias",
+            "loop": null,
+            "source_op": "tt.load"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%out"
+            ],
+            "instruction": "VEXPAND_DIMS",
+            "line": 72,
+            "loc": "out",
+            "loop": null,
+            "source_op": "tt.expand_dims"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%out_27"
+            ],
+            "instruction": "VBROADCAST",
+            "line": 73,
+            "loc": "out",
+            "loop": null,
+            "source_op": "tt.broadcast"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%out_28"
+            ],
+            "instruction": "VADD",
+            "line": 74,
+            "loc": "out",
+            "loop": null,
+            "source_op": "arith.addf"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%out_29"
+            ],
+            "instruction": "VMAX",
+            "line": 75,
+            "loc": "out",
+            "loop": null,
+            "source_op": "arith.maxnumf"
+          },
+          {
+            "col": 5,
+            "defs": [],
+            "instruction": "STS",
+            "line": 85,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "tt.store"
+          }
+        ],
+        "markers": []
+      },
+      "t3_modulo": {
+        "instructions": [
+          {
+            "col": 5,
+            "defs": [
+              "%rm"
+            ],
+            "instruction": "LI",
+            "line": 12,
+            "loc": "rm",
+            "loop": null,
+            "source_op": "arith.constant"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%rm_0"
+            ],
+            "instruction": "VMAKE_RANGE",
+            "line": 13,
+            "loc": "rm",
+            "loop": null,
+            "source_op": "tt.make_range"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%rm_1"
+            ],
+            "instruction": "VADD",
+            "line": 14,
+            "loc": "rm",
+            "loop": null,
+            "source_op": "arith.addi"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%rm_2"
+            ],
+            "instruction": "VSPLAT",
+            "line": 15,
+            "loc": "rm",
+            "loop": null,
+            "source_op": "tt.splat"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%rm_3"
+            ],
+            "instruction": "VMOD",
+            "line": 16,
+            "loc": "rm",
+            "loop": null,
+            "source_op": "arith.remsi"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%x"
+            ],
+            "instruction": "VEXPAND_DIMS",
+            "line": 17,
+            "loc": "x",
+            "loop": null,
+            "source_op": "tt.expand_dims"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%x_4"
+            ],
+            "instruction": "VSPLAT",
+            "line": 18,
+            "loc": "x",
+            "loop": null,
+            "source_op": "tt.splat"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%x_5"
+            ],
+            "instruction": "VMUL",
+            "line": 19,
+            "loc": "x",
+            "loop": null,
+            "source_op": "arith.muli"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%x_6"
+            ],
+            "instruction": "VEXPAND_DIMS",
+            "line": 20,
+            "loc": "x",
+            "loop": null,
+            "source_op": "tt.expand_dims"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%x_7"
+            ],
+            "instruction": "VSPLAT",
+            "line": 21,
+            "loc": "x",
+            "loop": null,
+            "source_op": "tt.splat"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%x_8"
+            ],
+            "instruction": "VMUL",
+            "line": 22,
+            "loc": "x",
+            "loop": null,
+            "source_op": "arith.muli"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%x_9"
+            ],
+            "instruction": "VBROADCAST",
+            "line": 23,
+            "loc": "x",
+            "loop": null,
+            "source_op": "tt.broadcast"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%x_10"
+            ],
+            "instruction": "VBROADCAST",
+            "line": 24,
+            "loc": "x",
+            "loop": null,
+            "source_op": "tt.broadcast"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%x_11"
+            ],
+            "instruction": "VADD",
+            "line": 25,
+            "loc": "x",
+            "loop": null,
+            "source_op": "arith.addi"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%x_12"
+            ],
+            "instruction": "VSPLAT",
+            "line": 26,
+            "loc": "x",
+            "loop": null,
+            "source_op": "tt.splat"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%0"
+            ],
+            "instruction": "VSPLAT",
+            "line": 29,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "tt.splat"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%1"
+            ],
+            "instruction": "VMUL",
+            "line": 30,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.muli"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%2"
+            ],
+            "instruction": "VSPLAT",
+            "line": 31,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "tt.splat"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%3"
+            ],
+            "instruction": "VMUL",
+            "line": 32,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.muli"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%4"
+            ],
+            "instruction": "VBROADCAST",
+            "line": 33,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "tt.broadcast"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%5"
+            ],
+            "instruction": "VBROADCAST",
+            "line": 34,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "tt.broadcast"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%6"
+            ],
+            "instruction": "VADD",
+            "line": 35,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "arith.addi"
+          },
+          {
+            "col": 5,
+            "defs": [
+              "%7"
+            ],
+            "instruction": "VSPLAT",
+            "line": 36,
+            "loc": "LOCFILE",
+            "loop": null,
+            "source_op": "tt.splat"
+          }
+        ],
+        "markers": [
+          "UNSUPPORTED(tt.addptr at tt.addptr@27:5 loc(x)): no elementwise instruction is admissible for this operand (17 candidate(s) rejected: VADD: op mismatch: tt.addptr not in ['addf', 'addi']; VSUB: op mismatch: tt.addptr not in ['subf', 'subi']; VMUL: op mismatch: tt.addptr not in ['mulf', 'muli']; VDIV: op mismatch: tt.addptr not in ['divf', 'divsi', 'divui']; VMOD: op mismatch: tt.addptr not in ['remsi', 'remui']; VNEG: op mismatch: tt.addptr not in ['negf']; VABS: op mismatch: tt.addptr not in ['absf']; VMAX: op mismatch: tt.addptr not in ['maxnumf', 'maxsi', 'maxui']; VMIN: op mismatch: tt.addptr not in ['minnumf', 'minsi', 'minui']; VCLAMP: op mismatch: tt.addptr not in ['clamp']; LI: op mismatch: tt.addptr not in ['constant']; VEXPAND_DIMS: op mismatch: tt.addptr not in ['expand_dims']; VBROADCAST: op mismatch: tt.addptr not in ['broadcast']; VSPLAT: op mismatch: tt.addptr not in ['splat']; VMAKE_RANGE: op mismatch: tt.addptr not in ['make_range']; VPID: op mismatch: tt.addptr not in ['get_program_id']; VCMP: op mismatch: tt.addptr not in ['cmpi', 'cmpf'])",
+          "UNSUPPORTED(tt.load at tt.load@28:5 loc(x)): unstructured access at %x_13: modulo wraparound",
+          "UNSUPPORTED(tt.addptr at tt.addptr@37:5 loc(LOCFILE)): no elementwise instruction is admissible for this operand (17 candidate(s) rejected: VADD: op mismatch: tt.addptr not in ['addf', 'addi']; VSUB: op mismatch: tt.addptr not in ['subf', 'subi']; VMUL: op mismatch: tt.addptr not in ['mulf', 'muli']; VDIV: op mismatch: tt.addptr not in ['divf', 'divsi', 'divui']; VMOD: op mismatch: tt.addptr not in ['remsi', 'remui']; VNEG: op mismatch: tt.addptr not in ['negf']; VABS: op mismatch: tt.addptr not in ['absf']; VMAX: op mismatch: tt.addptr not in ['maxnumf', 'maxsi', 'maxui']; VMIN: op mismatch: tt.addptr not in ['minnumf', 'minsi', 'minui']; VCLAMP: op mismatch: tt.addptr not in ['clamp']; LI: op mismatch: tt.addptr not in ['constant']; VEXPAND_DIMS: op mismatch: tt.addptr not in ['expand_dims']; VBROADCAST: op mismatch: tt.addptr not in ['broadcast']; VSPLAT: op mismatch: tt.addptr not in ['splat']; VMAKE_RANGE: op mismatch: tt.addptr not in ['make_range']; VPID: op mismatch: tt.addptr not in ['get_program_id']; VCMP: op mismatch: tt.addptr not in ['cmpi', 'cmpf'])",
+          "UNSUPPORTED(tt.store at tt.store@38:5 loc(LOCFILE)): unstructured access at %8: modulo wraparound"
+        ]
+      }
+    }
+  }
+}

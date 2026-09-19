@@ -1,0 +1,3 @@
+{
+  "src/tritonflow/idioms/detect.py:281:78:BoolFlip": "Flips `repr=False` to `repr=True` on the private `_by_id` field of AnnotationSet. It only changes the text of the dataclass __repr__; no value, comparison or behaviour depends on it, and AnnotationSet defines its own __str__."
+}
