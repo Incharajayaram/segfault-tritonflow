@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "machine": "tritonflow2",
+  "fit_id": "declared/toyisa-v2",
+  "source": {
+    "kind": "declared",
+    "version": "tritonflow2 (invented target: parameters are authored, not measured)",
+    "config_sha256": null,
+    "n_points": 0
+  },
+  "params": {
+    "cache_line_bytes": {
+      "value": 32.0,
+      "basis": "declared"
+    },
+    "lmem_banks": {
+      "value": 16.0,
+      "basis": "declared"
+    },
+    "alignment_words": {
+      "value": 4.0,
+      "basis": "declared"
+    }
+  }
+}

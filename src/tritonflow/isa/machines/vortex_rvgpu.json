@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "machine": "vortex_rvgpu",
+  "fit_id": "declared/vortex-upstream-snapshot",
+  "source": {
+    "kind": "declared",
+    "version": "vortex master snapshot (see third_party/vortex/SNAPSHOT.md)",
+    "config_sha256": "e8ae136a951dcbe7d90c752c463856378498b35a02f2bc2dc35140ce38c3b724",
+    "n_points": 0
+  },
+  "params": {
+    "cache_line_bytes": {
+      "value": 64.0,
+      "basis": "declared",
+      "from": "VX_CFG_MEM_BLOCK_SIZE"
+    },
+    "lmem_banks": {
+      "value": 4.0,
+      "basis": "declared",
+      "from": "VX_CFG_LMEM_NUM_BANKS = VX_CFG_NUM_LSU_LANES = VX_CFG_NUM_THREADS"
+    },
+    "alignment_words": {
+      "value": 4.0,
+      "basis": "declared",
+      "from": "schema constraint aligned(base, 4)"
+    }
+  }
+}
