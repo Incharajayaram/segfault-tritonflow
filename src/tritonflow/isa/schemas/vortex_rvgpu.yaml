@@ -5,10 +5,10 @@ description: >
   - Hopper-TMA-style DXA async copy engine (1D-5D, multicast, K-major transpose, transaction barriers)
   - Tensor Core Unit (TCU) supporting WGMMA/WMMA, 2:4 structured sparsity, MX block-scaled formats (MXFP8/NVFP4),
     and multi-backend FEDP (DPI, DSP, BHF, TFR)
-  - Multi-banked scratchpad memory (16 banks, 4-byte interleaving) with cycle-accurate bank conflict detection
+  - Multi-banked scratchpad memory (4 banks = LSU lanes, 4-byte interleaving) with cycle-accurate bank conflict detection
   - Coalescing memory unit and cache hierarchy (L0, L1, L2, L3)
   - Custom RISC-V instruction encodings (custom0 funct7=0x3 INST_SFU_DXA, INST_TCU_*)
-  - Hardware performance CSRs (0xB03-0xB07 DXA, 0xB08-0xB0A TCU, 0xCE0 cluster)
+  - Hardware performance CSRs (per-class MPM windows starting at 0xB03: DXA 0xB03-0xB07, TCU 0xB03-0xB05; 0xCE0 cluster)
   - Configurable microarchitecture mirroring VX_config.toml
 
 config:
@@ -24,25 +24,25 @@ config:
   memory:
     mem_block_size: 64
     mem_addr_width: 48
-    scratchpad_banks: 16
+    scratchpad_banks: 4
     scratchpad_interleave_bytes: 4
-    cache_line_bytes: 32
+    cache_line_bytes: 64
     l1_enabled: true
     l2_enabled: true
     l3_enabled: false
   tcu:
     tcu_type: "TFR"  # DPI | DSP | BHF | TFR
     num_lanes: 4
-    num_blocks: 4
+    num_blocks: 1
     sparse_enable: true
     mx_enable: true
     wgmma_enable: true
     fedp2k_enable: false
     latencies:
       dpi: 4
-      dsp: 12
-      bhf: 8
-      tfr: 6
+      dsp: 42
+      bhf: 13
+      tfr: 4
   dxa:
     num_units: 1
     queue_size: 16
@@ -57,9 +57,10 @@ csr_registers:
   DXA_GMEM_DEDUP: 0xB05
   DXA_LMEM_WRITES: 0xB06
   DXA_GMEM_LATENCY: 0xB07
-  TCU_TBUF_STALLS: 0xB08
-  TCU_TBUF_HITS: 0xB09
-  TCU_LMEM_READS: 0xB0A
+  TCU_TBUF_STALLS: 0xB03
+  TCU_TBUF_CACHE_HITS: 0xB04
+  TCU_TBUF_HITS: 0xB04
+  TCU_LMEM_READS: 0xB05
   CTA_CLUSTER_SIZE: 0xCE0
 
 data_model:
@@ -71,7 +72,7 @@ data_model:
     - name: scratch
       kind: banked
       dtype: f32
-      banks: 16
+      banks: 4
       interleave_bytes: 4
       alignment_words: 1
     - name: accum
@@ -94,40 +95,46 @@ instructions:
   - name: LDG
     kind: memory
     rule: memory
+    transfers: ["global>register"]
     direction: load
     addressing: {form: coalesced_global, fields: [base, sizes, strides, offsets]}
     time: {expr: "words / 2.0", unit: word}
-    cost: {expr: "0.50 * words", unit: word}
+    # Priced per cache-line transaction: equals 0.50 * words for a contiguous access
+    # and grows with stride or gather, which a per-element cost cannot express.
+    cost: {expr: "0.50 * line_words * transactions", unit: word}
     constraint: "in_bounds(base, length)"
     semantics: "dst[0:length] = global[base:base+length]"
 
   - name: STG
     kind: memory
     rule: memory
+    transfers: ["register>global"]
     direction: store
     addressing: {form: coalesced_global, fields: [base, sizes, strides, offsets]}
     time: {expr: "words / 2.0", unit: word}
-    cost: {expr: "0.50 * words", unit: word}
+    cost: {expr: "0.50 * line_words * transactions", unit: word}
     constraint: "in_bounds(base, length)"
     semantics: "global[base:base+length] = src[0:length]"
 
   - name: LDS
     kind: memory
     rule: memory
+    transfers: ["scratch>register"]
     direction: load
     addressing: {form: banked_scratchpad, fields: [base, sizes, strides, offsets]}
     time: {expr: "words / 8.0", unit: word}
-    cost: {expr: "0.10 * words", unit: word}
+    cost: {expr: "0.10 * words * (1 + bank_conflicts)", unit: word}
     constraint: "all_of(stride[1] == 1, size[0] % 4 == 0, size[1] % 4 == 0, in_bounds_all())"
     semantics: "dst[0:length] = scratch[base:base+length]"
 
   - name: STS
     kind: memory
     rule: memory
+    transfers: ["register>scratch"]
     direction: store
     addressing: {form: banked_scratchpad, fields: [base, sizes, strides, offsets]}
     time: {expr: "words / 8.0", unit: word}
-    cost: {expr: "0.10 * words", unit: word}
+    cost: {expr: "0.10 * words * (1 + bank_conflicts)", unit: word}
     constraint: "all_of(stride[1] == 1, size[0] % 4 == 0, size[1] % 4 == 0, in_bounds_all())"
     semantics: "scratch[base:base+length] = src[0:length]"
 
@@ -137,6 +144,7 @@ instructions:
   - name: DXA_COPY_1D
     kind: memory
     rule: async_copy
+    transfers: ["global>scratch"]
     async: true
     completion: barrier_transaction
     addressing: {form: descriptor_1d, fields: [base, length, desc_slot, bar_id, cta_mask]}
@@ -149,6 +157,7 @@ instructions:
   - name: DXA_COPY_2D
     kind: memory
     rule: async_copy
+    transfers: ["global>scratch"]
     async: true
     completion: barrier_transaction
     addressing: {form: descriptor_2d, fields: [base, sizes, strides, desc_slot, bar_id, cta_mask]}
@@ -161,6 +170,7 @@ instructions:
   - name: DXA_COPY_2D_KMAJOR
     kind: memory
     rule: async_copy
+    transfers: ["global>scratch"]
     async: true
     completion: barrier_transaction
     addressing: {form: descriptor_2d, fields: [base, sizes, strides, desc_slot, bar_id, cta_mask]}
@@ -173,6 +183,7 @@ instructions:
   - name: DXA_COPY_MULTICAST
     kind: memory
     rule: async_copy
+    transfers: ["scratch>scratch"]
     async: true
     completion: barrier_transaction
     addressing: {form: descriptor_2d, fields: [base, sizes, strides, desc_slot, bar_id, cta_mask, smem_stride]}
@@ -246,6 +257,7 @@ instructions:
   - name: TCU_LD_META
     kind: memory
     rule: memory
+    transfers: ["scratch>tcu_meta"]
     addressing: {form: register}
     encoding: {op_type: 5}
     time: {expr: "1.0", unit: cycle}
@@ -284,79 +296,205 @@ instructions:
   - name: VADD
     kind: compute
     rule: elementwise
-    op: [add, addf, addi, addptr, constant, get_program_id, make_range, splat, cmpi, select, expand_dims, broadcast]
+    op: [addf, addi]
     addressing: {form: register}
-    time: {expr: "words / 16.0", unit: cycle}
-    cost: {expr: "0.05 * words", unit: alu}
+    time: {expr: "10.0 * words / 4.0", unit: cycle}
+    # FADD: 10 cycles; /4 lanes (config.pipeline.simd_width).
+    cost: {expr: "2.5 * words", unit: cycle}
     constraint: "aligned(base, 4)"
     semantics: "dst[i] = src0[i] + src1[i]"
+
+  - name: VSUB
+    kind: compute
+    rule: elementwise
+    op: [subf, subi]
+    addressing: {form: register}
+    time: {expr: "10.0 * words / 4.0", unit: cycle}
+    # FSUB: 10 cycles; /4 lanes (config.pipeline.simd_width).
+    cost: {expr: "2.5 * words", unit: cycle}
+    constraint: "aligned(base, 4)"
+    semantics: "dst[i] = src0[i] - src1[i]"
 
   - name: VMUL
     kind: compute
     rule: elementwise
-    op: [mul, mulf, muli]
+    op: [mulf, muli]
     addressing: {form: register}
-    time: {expr: "words / 16.0", unit: cycle}
-    cost: {expr: "0.05 * words", unit: alu}
+    time: {expr: "10.0 * words / 4.0", unit: cycle}
+    # FMUL: 10 cycles; /4 lanes (config.pipeline.simd_width).
+    cost: {expr: "2.5 * words", unit: cycle}
     constraint: "aligned(base, 4)"
     semantics: "dst[i] = src0[i] * src1[i]"
 
   - name: VDIV
     kind: compute
     rule: elementwise
-    op: [div, divsi, divui]
+    op: [divf, divsi, divui]
     addressing: {form: register}
-    time: {expr: "words / 8.0", unit: cycle}
-    cost: {expr: "0.10 * words", unit: alu}
+    time: {expr: "19.0 * words / 4.0", unit: cycle}
+    # FDIV: 19 cycles; /4 lanes (config.pipeline.simd_width).
+    cost: {expr: "4.75 * words", unit: cycle}
     constraint: "aligned(base, 4)"
     semantics: "dst[i] = src0[i] / src1[i]"
-
-  - name: VSUB
-    kind: compute
-    rule: elementwise
-    op: [sub, subf, subi]
-    addressing: {form: register}
-    time: {expr: "words / 16.0", unit: cycle}
-    cost: {expr: "0.05 * words", unit: alu}
-    constraint: "aligned(base, 4)"
-    semantics: "dst[i] = src0[i] - src1[i]"
 
   - name: VMOD
     kind: compute
     rule: elementwise
-    op: [mod, remsi, remui]
+    op: [remsi, remui]
     addressing: {form: register}
-    time: {expr: "words / 8.0", unit: cycle}
-    cost: {expr: "0.10 * words", unit: alu}
+    time: {expr: "2.0 * words / 4.0", unit: cycle}
+    # REM: 2 cycles; /4 lanes (config.pipeline.simd_width).
+    cost: {expr: "0.5 * words", unit: cycle}
     constraint: "aligned(base, 4)"
     semantics: "dst[i] = src0[i] % src1[i]"
 
-  - name: VRELU
+  - name: VNEG
     kind: compute
     rule: elementwise
-    op: [relu, maxnumf]
+    op: [negf]
     addressing: {form: register}
-    time: {expr: "words / 16.0", unit: cycle}
-    cost: {expr: "0.05 * words", unit: alu}
+    time: {expr: "4.0 * words / 4.0", unit: cycle}
+    # FSGNJ: 4 cycles; /4 lanes (config.pipeline.simd_width).
+    cost: {expr: "1 * words", unit: cycle}
     constraint: "aligned(base, 4)"
-    semantics: "dst[i] = max(0, src[i])"
+    semantics: "dst[i] = -src[i]"
+
+  - name: VABS
+    kind: compute
+    rule: elementwise
+    op: [absf]
+    addressing: {form: register}
+    time: {expr: "4.0 * words / 4.0", unit: cycle}
+    # FSGNJ: 4 cycles; /4 lanes (config.pipeline.simd_width).
+    cost: {expr: "1 * words", unit: cycle}
+    constraint: "aligned(base, 4)"
+    semantics: "dst[i] = abs(src[i])"
+
+  - name: VMAX
+    kind: compute
+    rule: elementwise
+    op: [maxnumf, maxsi, maxui]
+    addressing: {form: register}
+    time: {expr: "4.0 * words / 4.0", unit: cycle}
+    # FMINMAX: 4 cycles; /4 lanes (config.pipeline.simd_width).
+    cost: {expr: "1 * words", unit: cycle}
+    constraint: "aligned(base, 4)"
+    semantics: "dst[i] = max(src0[i], src1[i])"
+
+  - name: VMIN
+    kind: compute
+    rule: elementwise
+    op: [minnumf, minsi, minui]
+    addressing: {form: register}
+    time: {expr: "4.0 * words / 4.0", unit: cycle}
+    # FMINMAX: 4 cycles; /4 lanes (config.pipeline.simd_width).
+    cost: {expr: "1 * words", unit: cycle}
+    constraint: "aligned(base, 4)"
+    semantics: "dst[i] = min(src0[i], src1[i])"
 
   - name: VCLAMP
     kind: compute
     rule: elementwise
-    op: [clamp, minnumf]
+    op: [clamp]
     addressing: {form: register}
-    time: {expr: "words / 16.0", unit: cycle}
-    cost: {expr: "0.05 * words", unit: alu}
+    time: {expr: "4.0 * words / 4.0", unit: cycle}
+    # FMINMAX: 4 cycles; /4 lanes (config.pipeline.simd_width).
+    cost: {expr: "1 * words", unit: cycle}
     constraint: "aligned(base, 4)"
     semantics: "dst[i] = min(max(lo, src[i]), hi)"
 
   # =========================================================================
+  # Scalar, Index, and Control Operations
+  # =========================================================================
+
+
+
+
+
+
+
+  # --- scalar / index work on the RV32IM core ------------------------------
+  #
+  # Latencies below are read from the upstream simulator, not estimated:
+  #   * integer ALU (LUI, ADD, SUB, SLL, SRL, SRA, SLT, SLTU, XOR, AND, OR, MUL,
+  #     DIV, REM) -> 2 cycles, vortex sim/simx/alu_unit.cpp:31-88 (commit 5ce5a1a)
+  #   * FPU FCMP / FMINMAX / FSGNJ -> 2 + pipeline delay 2 = 4 cycles,
+  #     vortex sim/simx/fpu_unit.cpp (FpuUnit::latency_of)
+  #   * FADD/FSUB/FMUL -> VX_CFG_FMA_LATENCY (8) + 2 = 10 cycles,
+  #     third_party/vortex/VX_config.toml:120, STD FPU, XLEN=32 so EXT_D is off
+  #   * FDIV -> VX_CFG_FDIV_LATENCY (17) + 2 = 19 cycles, VX_config.toml:121
+  #   * F2F/F2I/I2F -> VX_CFG_FCVT_LATENCY (5) + 2 = 7 cycles, VX_config.toml:124
+  # Each is divided by 4, the SIMD width (config.pipeline.simd_width), because one
+  # warp instruction retires that many elements.
+  #
+  # MODELLING ASSUMPTION, stated rather than hidden: an instruction that serves both
+  # a float and an integer op (VADD claims addf and addi) is priced at the float
+  # latency, which is the slower of the two. That over-prices integer work rather
+  # than under-pricing float work.
+
+  - name: LI
+    kind: compute
+    rule: elementwise
+    op: [constant]
+    addressing: {form: register}
+    # RISC-V `li` is a pseudo-instruction assembling to LUI/ADDI (RISC-V unprivileged
+    # ISA v2.2 ch.2, table of pseudo-instructions); both are AluType 2-cycle ops.
+    time: {expr: "2.0 * words / 4.0", unit: cycle}
+    cost: {expr: "0.5 * words", unit: cycle}
+    constraint: "in_bounds(base, length)"
+    semantics: "dst[0:length] = value"
+
+  - name: VCMP
+    kind: compute
+    rule: elementwise
+    op: [cmpi, cmpf]
+    addressing: {form: register}
+    # Integer compares are SLT/SLTU (2 cycles); float compares are FEQ.S/FLT.S/FLE.S
+    # (FpuType::FCMP, 4 cycles). Priced at the float latency per the note above.
+    # The predicate travels as an integer `predicate` operand holding the MLIR enum
+    # value; see isa/predicates.py. A compare without one is refused, never defaulted.
+    time: {expr: "4.0 * words / 4.0", unit: cycle}
+    cost: {expr: "1.0 * words", unit: cycle}
+    constraint: "aligned(base, 4)"
+    semantics: "dst[i] = cmp(pred, src0[i], src1[i])  -- cmpi cmpf"
+
+  # ---------------------------------------------------------------------------
+  # Deliberately absent: VSPLAT, VBROADCAST, VEXPAND_DIMS, VMAKE_RANGE, VPID.
+  # They were declared to make matmul lower on this ISA, but Vortex has no such
+  # instructions: splat/broadcast/expand_dims/make_range/program_id are tensor-shape
+  # operations that no RISC-V or Vortex-custom opcode implements (they are either
+  # eliminated by the memory descriptor, when they only form addresses, or refused),
+  # and the scalar work (constants, compares, integer arithmetic) runs on the RV32IM
+  # scalar core, whose per-instruction cost the vendored VX_config.toml does not
+  # provide. A kernel that needs them is refused on this ISA, by name.
+  # ---------------------------------------------------------------------------
+
+  # =========================================================================
   # Synchronization & Transaction Barriers
   # =========================================================================
+  - name: VCVT
+    kind: compute
+    rule: elementwise
+    op: [extf, truncf, sitofp, fptosi, extsi, trunci]
+    addressing: {form: register}
+    time: {expr: "7.0 * words / 4.0", unit: cycle}
+    # F2F/F2I/I2F: 7 cycles; /4 lanes (config.pipeline.simd_width).
+    cost: {expr: "1.75 * words", unit: cycle}
+    constraint: "aligned(base, 4)"
+    semantics: "dst[i] = cast(src0[i])"
+
+  # Deliberately absent: a reduce instruction. `tt.reduce` in Triton carries its combine
+  # function as a region (sum, max, min, xor, ...), and nothing in this pipeline extracts
+  # which one it is -- the parser builds the region generically and the emitted Instr does
+  # not record the combine operator. A reduce instruction declared here would therefore be
+  # executed as an unconditional sum, so a max-reduction would silently return a sum. That
+  # is a miscompile, not a limitation, so the claim is withdrawn until the combine operator
+  # is carried through. Reduction kernels are refused by name at selection.
+
   - name: BARRIER
     kind: memory
     rule: memory
+    transfers: []
     addressing: {form: register}
     time: {expr: "1.0", unit: cycle}
     cost: {expr: "0.01", unit: ctrl}
@@ -366,6 +504,7 @@ instructions:
   - name: BARRIER_EXPECT_TX
     kind: memory
     rule: memory
+    transfers: []
     addressing: {form: register}
     time: {expr: "1.0", unit: cycle}
     cost: {expr: "0.01", unit: ctrl}
@@ -375,6 +514,7 @@ instructions:
   - name: BARRIER_WAIT
     kind: memory
     rule: memory
+    transfers: []
     addressing: {form: register}
     time: {expr: "4.0", unit: cycle}
     cost: {expr: "0.02", unit: ctrl}

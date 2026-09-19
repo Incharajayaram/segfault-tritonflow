@@ -1,16 +1,18 @@
 """Instruction selection: enumerate, filter fail-closed, min cost, report the gap.
 
-`contracts/selector.md` is the normative spec. The whole module is five small
-functions because the schema is small by design (D6 in `research.md`): exhaustive
-enumeration *is* the oracle, which is what makes "the generator chose" auditable
-rather than asserted (FR-018, SC-005).
+The whole module is five small functions because the schema is small by
+design: exhaustive enumeration *is* the oracle, which is what makes "the
+generator chose" auditable rather than asserted.
 """
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 
-from .schema import Instruction, IsaSchema, cost_of, evaluate
+from tritonflow.isa.semantics import is_parseable
+
+from .schema import Instruction, IsaSchema, evaluate, set_active_schema
 
 __all__ = ["Candidate", "SelectionReport", "enumerate_candidates", "oracle_min", "select"]
 
@@ -23,6 +25,7 @@ class Candidate:
     admissible: bool
     rejected_by: str | None  # the predicate text that failed, or "unknown"
     cost: float | None
+    cost_result: object | None = None
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,7 @@ class SelectionReport:
     oracle_chosen: Instruction | None = None
     gap: float = 0.0
     no_admissible_lowering: bool = False
+    chosen_cost_result: object | None = None
 
 
 def _matches_op(entry: str, base_op: str) -> bool:
@@ -44,11 +48,15 @@ def _matches_op(entry: str, base_op: str) -> bool:
     base = base_op.lower()
     if entry == base:
         return True
-    if base.startswith("arith.") or base.startswith("tt."):
+    if "." in base:
         suffix = base.split(".", 1)[1]
-        if entry == suffix or entry in suffix:
+        if entry == suffix:
             return True
-    return entry in base
+    if "." in entry:
+        entry_suffix = entry.split(".", 1)[1]
+        if entry_suffix == base:
+            return True
+    return False
 
 
 def enumerate_candidates(
@@ -58,7 +66,9 @@ def enumerate_candidates(
     tile: tuple[int, ...] | None = None,
     env: dict[str, int] | None = None,
     direction: str | None = None,
+    machine: object | None = None,
 ) -> tuple[Candidate, ...]:
+    set_active_schema(schema.name)
     """Every instruction of `kind` against this operand, including rejected ones.
 
     Postcondition 1: nothing is pre-filtered — the rejected rows are the audit
@@ -70,9 +80,9 @@ def enumerate_candidates(
     def reason_of(instruction: object) -> str:
         """The predicate's author text, whatever shape the schema stores it in.
 
-        The real schema stores parsed `Predicate` objects; the frozen stand-in
-        (`qc/standin.py`) stores the raw string. Both must yield the *text*,
-        because postcondition 2's rejection reason is the predicate the author
+        The real schema stores parsed `Predicate` objects; a frozen stand-in
+        stores the raw string. Both must yield the *text*,
+        because the rejection reason is the predicate the author
         wrote, and a schema shape difference must not change what is reported.
         """
         constraint = getattr(instruction, "constraint", "")
@@ -80,14 +90,25 @@ def enumerate_candidates(
 
     out: list[Candidate] = []
     for instruction in schema.of_kind(kind):
+        if not getattr(instruction, 'semantics', None) or not is_parseable(instruction.semantics):
+            out.append(
+                Candidate(
+                    instruction,
+                    False,
+                    f"instruction has missing or unparseable semantics: {getattr(instruction, 'semantics', None)!r}",
+                    None,
+                )
+            )
+            continue
         serves = getattr(instruction, "serves", None)
         if direction is not None and callable(serves) and not serves(direction):
             out.append(
                 Candidate(
                     instruction,
                     False,
-                    f"declared direction {getattr(instruction, 'direction', None)!r} "
-                    f"cannot lower a {direction}",
+                    f"space mismatch: declared direction {getattr(instruction, 'direction', None)!r}, "
+                    f"transfers {list(getattr(instruction, 'transfers', None) or ())} "
+                    f"cannot lower a {direction} of a global kernel buffer",
                     None,
                 )
             )
@@ -95,16 +116,17 @@ def enumerate_candidates(
         verdict = evaluate(reason_of(instruction), descriptor, tile, env)
         reason: str | None = None
 
-        if kind == "elementwise" and getattr(instruction, "ops", None) and instruction.name not in ("EPI", "VPU"):
+        if kind == "elementwise":
             # The source op name is passed as the descriptor for compute ops, or as descriptor.base
             op_name = getattr(descriptor, "base", descriptor)
             if op_name and isinstance(op_name, str) and not op_name.startswith("%"):
-                if not any(_matches_op(entry, op_name) for entry in instruction.ops):
+                instr_ops = getattr(instruction, "ops", ())
+                if not instr_ops or not any(_matches_op(entry, op_name) for entry in instr_ops):
                     out.append(
                         Candidate(
                             instruction,
                             False,
-                            f"op mismatch: {op_name} not in {list(instruction.ops)}",
+                            f"op mismatch: {op_name} not in {list(instr_ops)}",
                             None,
                         )
                     )
@@ -132,8 +154,31 @@ def enumerate_candidates(
                     reason = f"format precondition not met: requires {instruction.format}"
 
         if verdict is True:
-            cost: float | None = cost_of(instruction, descriptor, tile, env)
-            out.append(Candidate(instruction, True, None, cost))
+            from .cost import (
+                CostQuery,
+                CostResultError,
+                CostUnknown,
+                evaluate_cost,
+                load_machine_by_name,
+            )
+            mach = machine
+            if mach is None:
+                with contextlib.suppress(Exception):
+                    mach = load_machine_by_name(schema.name)
+            dir_val = direction.lower() if (direction and direction.lower() in ("load", "store")) else None
+            query = CostQuery(
+                instruction=instruction,
+                access=descriptor,
+                tile=tile,
+                direction=dir_val,
+                env=env or {},
+                machine=mach,
+            )
+            try:
+                res = evaluate_cost(query, mach)
+                out.append(Candidate(instruction, True, None, res.select_cost, cost_result=res))
+            except (CostUnknown, CostResultError) as error:
+                out.append(Candidate(instruction, False, f"cost undecidable: {error}", None, None))
         else:
             text = reason_of(instruction)
             if reason is None:
@@ -149,6 +194,7 @@ def select(
     tile: tuple[int, ...] | None = None,
     env: dict[str, int] | None = None,
     direction: str | None = None,
+    machine: object | None = None,
 ) -> SelectionReport:
     """Minimum cost among the admissible; no default fallback.
 
@@ -157,12 +203,12 @@ def select(
     Postcondition 4: nothing admissible means `chosen is None` and
     `no_admissible_lowering=True`; the emitter turns that into `UNSUPPORTED`.
     Postcondition 5: `oracle_min` runs the same enumeration the other way, and
-    the gap is reported, not hidden (SC-005, EC-072).
+    the gap is reported, not hidden.
     """
-    candidates = enumerate_candidates(schema, kind, descriptor, tile, env, direction)
+    candidates = enumerate_candidates(schema, kind, descriptor, tile, env, direction, machine=machine)
     admissible = [c for c in candidates if c.admissible and c.cost is not None]
     if not admissible:
-        oracle = oracle_min(schema, kind, descriptor, tile, env, direction)
+        oracle = oracle_min(schema, kind, descriptor, tile, env, direction, machine=machine)
         return SelectionReport(
             chosen=None,
             chosen_cost=None,
@@ -174,7 +220,7 @@ def select(
         )
     order = {id(c.instruction): i for i, c in enumerate(candidates)}
     best = min(admissible, key=lambda c: (c.cost, order[id(c.instruction)]))
-    oracle = oracle_min(schema, kind, descriptor, tile, env, direction)
+    oracle = oracle_min(schema, kind, descriptor, tile, env, direction, machine=machine)
     gap = max(0.0, (best.cost or 0.0) - (oracle.oracle_min_cost or 0.0))
     return SelectionReport(
         chosen=best.instruction,
@@ -194,6 +240,7 @@ def oracle_min(
     tile: tuple[int, ...] | None = None,
     env: dict[str, int] | None = None,
     direction: str | None = None,
+    machine: object | None = None,
 ) -> SelectionReport:
     """The exhaustive oracle: same enumeration, optimum reported separately.
 
@@ -201,9 +248,9 @@ def oracle_min(
     agree by construction — there is no coupling between instructions, because
     one operand maps to exactly one instruction. The function exists so the
     *report* carries the oracle column and a future ISA with coupled costs
-    (ISA-2's bank moves) cannot silently drop the comparison (SC-005).
+    (ISA-2's bank moves) cannot silently drop the comparison.
     """
-    candidates = enumerate_candidates(schema, kind, descriptor, tile, env, direction)
+    candidates = enumerate_candidates(schema, kind, descriptor, tile, env, direction, machine=machine)
     admissible = [c for c in candidates if c.admissible and c.cost is not None]
     if not admissible:
         return SelectionReport(

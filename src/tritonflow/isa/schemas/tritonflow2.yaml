@@ -34,23 +34,50 @@ instructions:
   - name: LDG
     kind: memory
     rule: memory
+    transfers: ["global>scratch"]
     addressing: {form: contiguous_1d, fields: [base, length]}
     time: {expr: "words / 2.0", unit: word}
-    cost: {expr: "0.80 * words", unit: word}
+    cost: {expr: "0.80 * line_words * transactions", unit: word}
     constraint: "in_bounds(base, length)"
     semantics: "scratch[0:length] = global[0:length]"
 
   - name: LDS2D
     kind: memory
     rule: memory
+    transfers: ["global>scratch"]
     addressing: {form: tiled_2d, fields: [base, sizes, strides, offsets]}
     time: {expr: "words / 2.2", unit: word}
-    cost: {expr: "0.45 * words", unit: word}
+    cost: {expr: "0.45 * words * (1 + bank_conflicts)", unit: word}
     # The banked scratchpad needs the column stride FREE (any single column is
     # one bank) and both extents bank-aligned; this is the constraint ISA-1's
     # DMA2D does not have, which is what the transfer report must surface.
     constraint: "all_of(stride[1] == 1, size[0] % 4 == 0, size[1] % 4 == 0, in_bounds_all())"
     semantics: "scratch[i, 0:sizes[1]] = global[offsets[0]+i*strides[0], offsets[1]:...]"
+
+  # tritonflow2 is a project-defined research ISA, so there is no upstream
+  # document to source its store path from. It had no instruction that writes
+  # `global`, which made every kernel output go through a load instruction. The
+  # two stores below mirror the load path (same addressing form, same cost
+  # expression) as an explicit MODELLING ASSUMPTION, not a measured fact.
+  - name: STG
+    kind: memory
+    rule: memory
+    transfers: ["scratch>global"]
+    addressing: {form: contiguous_1d, fields: [base, length]}
+    time: {expr: "words / 2.0", unit: word}
+    cost: {expr: "0.80 * line_words * transactions", unit: word}
+    constraint: "in_bounds(base, length)"
+    semantics: "global[0:length] = scratch[0:length]"
+
+  - name: STG2D
+    kind: memory
+    rule: memory
+    transfers: ["scratch>global"]
+    addressing: {form: tiled_2d, fields: [base, sizes, strides, offsets]}
+    time: {expr: "words / 2.2", unit: word}
+    cost: {expr: "0.45 * words * (1 + bank_conflicts)", unit: word}
+    constraint: "all_of(stride[1] == 1, size[0] % 4 == 0, size[1] % 4 == 0, in_bounds_all())"
+    semantics: "global[offsets[0]+i*strides[0], offsets[1]:...] = scratch[i, 0:sizes[1]]"
 
   # ---- compute ------------------------------------------------------------ #
   - name: OPU32
@@ -77,14 +104,77 @@ instructions:
     constraint: "all_of(aligned(a_base, 8), aligned(b_base, 8))"
     semantics: "acc[m,n] += sum_k a[m,k] * b[k,n]  (k in 4-wide blocks, block-local reassociation)"
 
-  - name: VPU
+  - name: VPU_ADD
     kind: compute
     rule: elementwise
-    op: [add, relu]
+    op: [addf, addi]
     addressing: {form: elementwise, fields: [base, length]}
     cost: {expr: "0.40 * elements", unit: element}
     constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
-    semantics: "dst[i] = op(src[i])"
+    semantics: "dst[i] = src0[i] + src1[i]"
+
+  - name: VPU_SUB
+    kind: compute
+    rule: elementwise
+    op: [subf, subi]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.40 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = src0[i] - src1[i]"
+
+  - name: VPU_MUL
+    kind: compute
+    rule: elementwise
+    op: [mulf, muli]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.40 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = src0[i] * src1[i]"
+
+  - name: VPU_DIV
+    kind: compute
+    rule: elementwise
+    op: [divf, divsi, divui]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.40 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = src0[i] / src1[i]"
+
+  - name: VPU_NEG
+    kind: compute
+    rule: elementwise
+    op: [negf]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.40 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = -src[i]"
+
+  - name: VPU_ABS
+    kind: compute
+    rule: elementwise
+    op: [absf]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.40 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = abs(src[i])"
+
+  - name: VPU_MAX
+    kind: compute
+    rule: elementwise
+    op: [maxnumf, maxsi, maxui]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.40 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = max(src0[i], src1[i])"
+
+  - name: VPU_MIN
+    kind: compute
+    rule: elementwise
+    op: [minnumf, minsi, minui]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.40 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = min(src0[i], src1[i])"
 
   - name: CLAMP
     kind: compute
@@ -94,3 +184,60 @@ instructions:
     cost: {expr: "0.45 * elements", unit: element}
     constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
     semantics: "dst[i] = min(max(src[i], 0), 6)  — hardswish tail; the op ISA-1 has no encoding for"
+
+  - name: MOVI
+    kind: compute
+    rule: elementwise
+    op: [constant]
+    addressing: {form: register}
+    cost: {expr: "0.10 * elements", unit: element}
+    constraint: "in_bounds(base, length)"
+    semantics: "dst[0:length] = value"
+
+  # Compare. The predicate (eq, slt, ult, ogt, ...) is an integer `predicate` operand carrying the
+  # MLIR enum value; see isa/predicates.py. This ISA is project-defined and the compare unit
+  # mirrors its sibling elementwise instructions (same cost expression) as a modelling
+  # assumption, not a measured figure.
+  - name: VPU_CMP
+    kind: compute
+    rule: elementwise
+    op: [cmpi, cmpf]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.40 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = cmp(pred, src0[i], src1[i])  -- cmpi cmpf"
+
+  - name: VPU_EXPAND_DIMS
+    kind: compute
+    rule: elementwise
+    op: [expand_dims]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.10 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[0:length] = src[0:length]  -- expand_dims"
+
+  - name: VPU_BROADCAST
+    kind: compute
+    rule: elementwise
+    op: [broadcast]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.10 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[0:length] = src[0:length]  -- broadcast"
+
+  - name: VPU_CVT
+    kind: compute
+    rule: elementwise
+    op: [extf, truncf, sitofp, fptosi, extsi, trunci]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.40 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = cast(src0[i])"
+
+  # Deliberately absent: a reduce instruction. `tt.reduce` in Triton carries its combine
+  # function as a region (sum, max, min, xor, ...), and nothing in this pipeline extracts
+  # which one it is -- the parser builds the region generically and the emitted Instr does
+  # not record the combine operator. A reduce instruction declared here would therefore be
+  # executed as an unconditional sum, so a max-reduction would silently return a sum. That
+  # is a miscompile, not a limitation, so the claim is withdrawn until the combine operator
+  # is carried through. Reduction kernels are refused by name at selection.

@@ -19,6 +19,7 @@ instructions:
   - name: DMA1D
     kind: memory
     rule: memory
+    transfers: ["global>register", "register>global"]
     addressing: {form: contiguous_1d, fields: [base, length]}
     time: {expr: "words / 1.0", unit: word}
     cost: {expr: "1.00 * words", unit: word}
@@ -28,6 +29,7 @@ instructions:
   - name: DMA2D
     kind: memory
     rule: memory
+    transfers: ["global>register", "register>global"]
     addressing: {form: tiled_2d, fields: [base, sizes, strides, offsets]}
     time: {expr: "words / 1.6", unit: word}
     cost: {expr: "0.60 * words", unit: word}
@@ -60,11 +62,131 @@ instructions:
     constraint: "all_of(stride[1] == 1, aligned(a_base, 4), m % 16 == 0, n % 16 == 0)"
     semantics: "acc[m,n] += sum_k a[m,k] * b[k,n]"
 
-  - name: EPI
+  - name: EPI_ADD
     kind: compute
     rule: elementwise
-    op: [add, relu]
+    op: [addf, addi]
     addressing: {form: elementwise, fields: [base, length]}
     cost: {expr: "0.50 * elements", unit: element}
     constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
-    semantics: "dst[i] = op(src[i])"
+    semantics: "dst[i] = src0[i] + src1[i]"
+
+  - name: EPI_SUB
+    kind: compute
+    rule: elementwise
+    op: [subf, subi]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.50 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = src0[i] - src1[i]"
+
+  - name: EPI_MUL
+    kind: compute
+    rule: elementwise
+    op: [mulf, muli]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.50 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = src0[i] * src1[i]"
+
+  - name: EPI_DIV
+    kind: compute
+    rule: elementwise
+    op: [divf, divsi, divui]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.50 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = src0[i] / src1[i]"
+
+  - name: EPI_NEG
+    kind: compute
+    rule: elementwise
+    op: [negf]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.50 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = -src[i]"
+
+  - name: EPI_ABS
+    kind: compute
+    rule: elementwise
+    op: [absf]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.50 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = abs(src[i])"
+
+  - name: EPI_MAX
+    kind: compute
+    rule: elementwise
+    op: [maxnumf, maxsi, maxui]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.50 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = max(src0[i], src1[i])"
+
+  - name: EPI_MIN
+    kind: compute
+    rule: elementwise
+    op: [minnumf, minsi, minui]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.50 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = min(src0[i], src1[i])"
+
+  - name: MOVI
+    kind: compute
+    rule: elementwise
+    op: [constant]
+    addressing: {form: register}
+    cost: {expr: "0.10 * elements", unit: element}
+    constraint: "in_bounds(base, length)"
+    semantics: "dst[0:length] = value"
+
+  # Compare. The predicate (eq, slt, ult, ogt, ...) is an integer `predicate` operand carrying the
+  # MLIR enum value; see isa/predicates.py. This ISA is project-defined and the compare unit
+  # mirrors its sibling elementwise instructions (same cost expression) as a modelling
+  # assumption, not a measured figure.
+  - name: EPI_CMP
+    kind: compute
+    rule: elementwise
+    op: [cmpi, cmpf]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.50 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = cmp(pred, src0[i], src1[i])  -- cmpi cmpf"
+
+  - name: EPI_EXPAND_DIMS
+    kind: compute
+    rule: elementwise
+    op: [expand_dims]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.10 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[0:length] = src[0:length]  -- expand_dims"
+
+  - name: EPI_BROADCAST
+    kind: compute
+    rule: elementwise
+    op: [broadcast]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.10 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[0:length] = src[0:length]  -- broadcast"
+
+  - name: EPI_CVT
+    kind: compute
+    rule: elementwise
+    op: [extf, truncf, sitofp, fptosi, extsi, trunci]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.50 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = cast(src0[i])"
+
+  # Deliberately absent: a reduce instruction. `tt.reduce` in Triton carries its combine
+  # function as a region (sum, max, min, xor, ...), and nothing in this pipeline extracts
+  # which one it is -- the parser builds the region generically and the emitted Instr does
+  # not record the combine operator. A reduce instruction declared here would therefore be
+  # executed as an unconditional sum, so a max-reduction would silently return a sum. That
+  # is a miscompile, not a limitation, so the claim is withdrawn until the combine operator
+  # is carried through. Reduction kernels are refused by name at selection.

@@ -53,10 +53,11 @@ class TestVortexSchemaCapabilities(unittest.TestCase):
         self.assertEqual(csrs["DXA_GMEM_DEDUP"], 0xB05)
         self.assertEqual(csrs["DXA_LMEM_WRITES"], 0xB06)
         self.assertEqual(csrs["DXA_GMEM_LATENCY"], 0xB07)
-        # TCU CSRs
-        self.assertEqual(csrs["TCU_TBUF_STALLS"], 0xB08)
-        self.assertEqual(csrs["TCU_TBUF_HITS"], 0xB09)
-        self.assertEqual(csrs["TCU_LMEM_READS"], 0xB0A)
+        # TCU CSRs (upstream MPM class 11 multiplexed: 0xB03-0xB05)
+        self.assertEqual(csrs["TCU_TBUF_STALLS"], 0xB03)
+        self.assertEqual(csrs["TCU_TBUF_CACHE_HITS"], 0xB04)
+        self.assertEqual(csrs["TCU_TBUF_HITS"], 0xB04)
+        self.assertEqual(csrs["TCU_LMEM_READS"], 0xB05)
         self.assertEqual(csrs["CTA_CLUSTER_SIZE"], 0xCE0)
 
     def test_memory_spaces_with_banking(self) -> None:
@@ -68,7 +69,7 @@ class TestVortexSchemaCapabilities(unittest.TestCase):
 
         scratch = spaces["scratch"]
         self.assertEqual(scratch.kind, "banked")
-        self.assertEqual(scratch.banks, 16)
+        self.assertEqual(scratch.banks, 4)
         self.assertEqual(scratch.interleave_bytes, 4)
 
     def test_dxa_instruction_definitions(self) -> None:
@@ -146,7 +147,7 @@ class TestTcuEmulator(unittest.TestCase):
     """Verify Vortex TCU functional and timing emulation."""
 
     def test_fedp_backend_latencies(self) -> None:
-        for backend, expected_lat in [("DPI", 4), ("DSP", 12), ("BHF", 8), ("TFR", 6)]:
+        for backend, expected_lat in [("DPI", 4), ("DSP", 42), ("BHF", 13), ("TFR", 4)]:
             emu = TcuEmulator(fedp_type=backend)
             self.assertEqual(emu.fedp_latency, expected_lat)
 

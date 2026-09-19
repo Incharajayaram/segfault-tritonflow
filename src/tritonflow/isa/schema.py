@@ -1,19 +1,18 @@
 """The ISA schema: declarative instructions, a decidable predicate language,
 fail-closed admissibility, and total costs.
 
-`contracts/isa-schema.md` is the normative spec; `data-model.md` §1.1–§1.2 is the
-schema document itself. Three design decisions are worth reading before the code,
-because each is a place where a plausible shortcut would have been a lie:
+Three design decisions are worth reading before the code, because each is a
+place where a plausible shortcut would have been a lie:
 
 1. **The predicate language is not an expression evaluator over Python.** It is a
-   small grammar (`data-model.md` §1.2): terms, integer comparisons, `aligned`,
+   small grammar: terms, integer comparisons, `aligned`,
    the two `in_bounds` forms, and `all_of`/`any_of`. Deliberately not
-   Turing-complete — ACT's addressing phase is integer constraint programming
-   (§6), and a CP solver does not fit this project's budget. A decidable subset
-   is what makes selection *auditable*: the rejected candidate names the exact
-   predicate that refused it (FR-018), which `eval` could never do.
+   Turing-complete — a full addressing solver would be integer constraint
+   programming, and a CP solver does not fit this project's budget. A decidable
+   subset is what makes selection *auditable*: the rejected candidate names the
+   exact predicate that refused it, which `eval` could never do.
 
-2. **Fail-closed is a construction, not a check (FR-017).** Every term resolves
+2. **Fail-closed is a construction, not a check.** Every term resolves
    to a `maybe` value: an integer, or `unknown`. Arithmetic on `unknown` gives
    `unknown`; a comparison involving `unknown` gives `"unknown"`; the selector
    treats `"unknown"` as inadmissible. There is no code path that turns a
@@ -21,7 +20,7 @@ because each is a place where a plausible shortcut would have been a lie:
    predicate to decide `True`.
 
 3. **Symbolic descriptors decide only what a launch environment grounds.** A
-   descriptor's strides are `int | SymExpr` by data-model §3, so `%sam % 4 == 0`
+   descriptor's strides are `int | SymExpr`, so `%sam % 4 == 0`
    is `unknown` unless the caller supplies the launch environment
    (`{"%sam": 128, ...}`). That is the honest behaviour: the *same* program can
    have an aligned or misaligned access depending on launch parameters, and a
@@ -30,13 +29,13 @@ because each is a place where a plausible shortcut would have been a lie:
    otherwise — and the corpus's environment is a declared fact in the checks,
    never guessed at the call site.
 
-**Why instructions carry both `kind` and `rule`.** The schema document's coarse
-axis is `memory | compute` (§1.1); the recogniser's binding kinds are the three
+**Why instructions carry both `kind` and `rule`.** The schema's coarse
+axis is `memory | compute`; the recogniser's binding kinds are the three
 *lowering sets* `memory | mac | elementwise` (recognize/op_shapes.py). A selector
 asked for `compute` and handed both a MAC and an EPI would be answering two
 questions at once — the same defect class as a rule table that conflated them.
 `rule` is therefore the grouping the selector enumerates; `kind` remains the
-document axis the validator's minimum-variety rule (FR-015) counts.
+axis the validator's minimum-variety rule counts.
 """
 
 from __future__ import annotations
@@ -45,6 +44,8 @@ import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
+
+from tritonflow.isa.semantics import is_parseable
 
 from ..recognize.walk import SymExpr
 
@@ -92,9 +93,9 @@ class PredicateError(SchemaError):
 class CostError(SchemaError):
     """A cost expression cannot be evaluated for this operand.
 
-    `contracts/isa-schema.md` postcondition 3: costs are total. A cost that
-    cannot be evaluated (a division by a zero tile dimension, an `unknown` term)
-    is a schema error, not a runtime surprise.
+    Costs are total: a cost that cannot be evaluated (a division by a zero
+    tile dimension, an `unknown` term) is a schema error, not a runtime
+    surprise.
     """
 
 
@@ -397,9 +398,8 @@ def _walk_terms(node: object, into: set[str]) -> None:
 class Predicate:
     """A parsed constraint expression, carrying its original text.
 
-    The text is load-bearing: `contracts/selector.md` postcondition 2 says a
-    rejected candidate names *the predicate that failed*, and `data-model.md`'s
-    example report shows `"by": "cost(1.00*words) > 0.60*words"` — the author's
+    The text is load-bearing: a rejected candidate names *the predicate that
+    failed*, e.g. `"by": "cost(1.00*words) > 0.60*words"` — the author's
     text, not a rendering of an AST.
     """
 
@@ -614,6 +614,8 @@ def _resolve(
             return None
         return _as_int(sequence[node.index], env)
     if isinstance(node, Name):
+        if env and node.text in env and isinstance(env[node.text], int):
+            return env[node.text]
         if node.text in _POINTER_TERMS:
             # A pointer operand as an arithmetic value: the address is the
             # allocator's fact, not the descriptor's (see `aligned`). Unknown.
@@ -776,7 +778,7 @@ def _eval_call(
         # unsigned tile coordinate), a kernel parameter is non-negative because
         # the launcher typed it so. `launch_env.json` declares the class as the
         # string "pid"; an unclassed symbol leaves the sign unknown — and
-        # unknown stays inadmissible (FR-017), never assumed positive.
+        # unknown stays inadmissible, never assumed positive.
         for name_seq, comparator in (("offset", ">="), ("size", ">")):
             sequence = _sequence(name_seq, descriptor) or ()
             for element in sequence:
@@ -826,8 +828,8 @@ def evaluate(
     """`True`, `False`, or `"unknown"` — never an exception, never a guess.
 
     `False` carries no reason because it needs none: the *predicate's own text*
-    is the reason, which is what the selector records (FR-018). `"unknown"` is
-    the fail-closed verdict (FR-017): the selector treats it as inadmissible,
+    is the reason, which is what the selector records. `"unknown"` is
+    the fail-closed verdict: the selector treats it as inadmissible,
     and it is the *only* way a missing fact can influence a decision.
     """
     parsed = _parse_predicate(predicate)
@@ -907,56 +909,19 @@ def cost_of(
     (an empty move is free); a division by a zero tile dimension is a schema
     error raised *here*, with the instruction's name on it.
     """
-    # A cost may be a parsed `CostExpr` (the real schema) or a plain number (the
-    # frozen stand-in, `qc/standin.py`). The number case is passed through: it
-    # is already total, and inventing a parse for it would change nothing.
-    if isinstance(instr.cost, (int, float)) and not isinstance(instr.cost, bool):
-        return float(instr.cost)
-    terms = _cost_terms(descriptor, tile, env)
-
-    def resolve(node: object) -> float:
-        if isinstance(node, Num):
-            return float(node.value)
-        if isinstance(node, Unary):
-            return -resolve(node.operand)
-        if isinstance(node, BinOp):
-            left, right = resolve(node.left), resolve(node.right)
-            if node.operator == "+":
-                return left + right
-            if node.operator == "-":
-                return left - right
-            if node.operator == "*":
-                return left * right
-            if node.operator == "/":
-                if right == 0.0:
-                    raise CostError(
-                        f"{instr.name}: cost {instr.cost.text!r} divides by zero for this operand"
-                    )
-                return left / right
-            raise CostError(f"{instr.name}: operator {node.operator!r} is not arithmetic")
-        if isinstance(node, Name):
-            if node.text not in terms:
-                raise CostError(
-                    f"{instr.name}: cost {instr.cost.text!r} references unknown term {node.text!r}"
-                )
-            return terms[node.text]
-        raise CostError(f"{instr.name}: cannot evaluate {node!r} in a cost expression")
-
-    value = resolve(instr.cost.ast)
-    if value < 0.0:
-        raise CostError(f"{instr.name}: cost {instr.cost.text!r} evaluated to a negative number")
+    cost_expr = getattr(instr, "select_cost", None) or getattr(instr, "cost", None)
+    if isinstance(cost_expr, (int, float)) and not isinstance(cost_expr, bool):
+        return float(cost_expr)
     if instr.rule == "mac" and tile is None:
-        # A MAC's cost is a function of m·n·k; with no tile every term is 0 and
-        # the cost would silently be 0.0 — making MAC16 (the cheaper formula)
-        # always win on a question nobody asked. Costing a MAC without a tile
-        # is a caller bug, not a cheap instruction.
-        raise CostError(f"{instr.name}: cost {instr.cost.text!r} needs a tile; got None")
-    return value
+        raise CostError(f"{instr.name}: cost needs a tile; got None")
 
-
-# --------------------------------------------------------------------------- #
-# Schema data model
-# --------------------------------------------------------------------------- #
+    from .cost import CostQuery, CostResultError, CostUnknown, evaluate_cost
+    query = CostQuery(instruction=instr, access=descriptor, tile=tile, env=env or {})
+    try:
+        res = evaluate_cost(query)
+        return float(res.select_cost)
+    except (CostUnknown, CostResultError) as err:
+        raise CostError(str(err)) from err
 
 
 @dataclass(frozen=True)
@@ -1021,11 +986,45 @@ class Instruction:
     encoding: dict[str, Any] | None = None
     backend: str | None = None
     direction: str | None = None
+    select_cost: CostExpr | None = None
+    #: Legal `(source space, destination space)` moves of a memory/async_copy
+    #: instruction, read from its `transfers:` key. `None` means "not declared"
+    #: (compute instructions); `()` means "moves no data" (a barrier).
+    transfers: tuple[tuple[str, str], ...] | None = None
+
+    def __post_init__(self) -> None:
+        if self.select_cost is None and self.cost is not None:
+            object.__setattr__(self, "select_cost", self.cost)
+        elif self.cost is None and self.select_cost is not None:
+            object.__setattr__(self, "cost", self.select_cost)
+
+    def reads_from(self, space: str) -> bool:
+        """Can this instruction take data out of `space`?"""
+        return any(src == space for src, _ in (self.transfers or ()))
+
+    def writes_to(self, space: str) -> bool:
+        """Can this instruction put data into `space`?"""
+        return any(dst == space for _, dst in (self.transfers or ()))
 
     def serves(self, direction: str | None) -> bool:
-        if direction is None or self.direction is None:
+        """Can this instruction lower a kernel-buffer `load` or `store`?
+
+        Kernel buffers live in the `global` space, so a load needs a transfer that
+        reads `global` and a store needs one that writes `global`. An instruction
+        whose only transfers are scratch-side (LDS, STS, LDS2D) cannot serve either.
+        """
+        if direction is None:
             return True
-        return self.direction.lower() == direction.lower()
+        wanted = direction.lower()
+        if self.direction is not None and self.direction.lower() != wanted:
+            return False
+        if self.transfers is None:
+            return True
+        if wanted == "load":
+            return self.reads_from("global")
+        if wanted == "store":
+            return self.writes_to("global")
+        return True
 
     def admissible_for(
         self,
@@ -1071,7 +1070,7 @@ class IsaSchema:
         tile: tuple[int, ...] | None = None,
         env: dict[str, int] | None = None,
     ) -> Verdict | str:
-        """The emitter's independent re-validation seam (`contracts/assembler.md`).
+        """The emitter's independent re-validation seam.
 
         `check_constraint` re-checks the chosen instruction's constraint through
         the schema rather than trusting selection's own verdict — the same
@@ -1177,10 +1176,14 @@ def _build(raw: dict[str, Any], source: str) -> IsaSchema:
         try:
             constraint = Predicate(str(constraint_text)) if constraint_text is not None else None
             cost = CostExpr(str(cost_text)) if cost_text is not None else None
+            select_cost_raw = entry.get("select_cost")
+            select_cost = CostExpr(str(select_cost_raw)) if select_cost_raw is not None else cost
             time_expr = None
             time_raw = entry.get("time")
             if isinstance(time_raw, dict) and time_raw.get("expr") is not None:
                 time_expr = CostExpr(str(time_raw["expr"]))
+            elif isinstance(time_raw, str):
+                time_expr = CostExpr(time_raw)
         except PredicateError as error:
             raise SchemaError(f"{source}: instruction {instruction_name!r}: {error}") from error
         accumulate_raw = entry.get("accumulate")
@@ -1223,6 +1226,8 @@ def _build(raw: dict[str, Any], source: str) -> IsaSchema:
             encoding=dict(encoding_raw) if isinstance(encoding_raw, dict) else None,
             backend=entry.get("backend"),
             direction=entry.get("direction"),
+            select_cost=select_cost,
+            transfers=_parse_transfers(instruction_name, entry.get("transfers"), source),
         )
 
     csr_regs: dict[str, int] = {}
@@ -1241,6 +1246,25 @@ def _build(raw: dict[str, Any], source: str) -> IsaSchema:
         config=dict(raw.get("config") or {}),
         csr_registers=csr_regs,
     )
+
+
+def _parse_transfers(
+    name: str, raw: Any, source: str
+) -> tuple[tuple[str, str], ...] | None:
+    """`transfers: ["global>register", ...]` -> `(("global", "register"), ...)`."""
+    if raw is None:
+        return None
+    if not isinstance(raw, (list, tuple)):
+        raise SchemaError(f"{source}: instruction {name!r}: transfers must be a list, got {raw!r}")
+    parsed: list[tuple[str, str]] = []
+    for item in raw:
+        parts = str(item).split(">")
+        if len(parts) != 2 or not all(p.strip() for p in parts):
+            raise SchemaError(
+                f"{source}: instruction {name!r}: transfer {item!r} must look like 'src>dst'"
+            )
+        parsed.append((parts[0].strip(), parts[1].strip()))
+    return tuple(parsed)
 
 
 #: Known schema versions. Forward compatibility is *not* assumed (contract
@@ -1268,14 +1292,14 @@ def validate_schema(schema: IsaSchema) -> list[SchemaViolation]:
     if memory_count < 2:
         problems.append(
             SchemaViolation(
-                "instructions", f"memory instruction count must be >= 2, is {memory_count} (FR-015)"
+                "instructions", f"memory instruction count must be >= 2, is {memory_count}"
             )
         )
     if mac_count < 2:
         problems.append(
             SchemaViolation(
                 "instructions",
-                f"compute MAC instruction count must be >= 2, is {mac_count} (FR-015)",
+                f"compute MAC instruction count must be >= 2, is {mac_count}",
             )
         )
 
@@ -1283,9 +1307,9 @@ def validate_schema(schema: IsaSchema) -> list[SchemaViolation]:
     for instruction in schema.instructions.values():
         path = f"instructions.{instruction.name}"
         if instruction.constraint is None:
-            problems.append(SchemaViolation(path, "has no constraint (FR-014)"))
+            problems.append(SchemaViolation(path, "has no constraint"))
         if instruction.cost is None:
-            problems.append(SchemaViolation(path, "has no cost (FR-014)"))
+            problems.append(SchemaViolation(path, "has no cost"))
         if instruction.kind not in _KINDS:
             problems.append(
                 SchemaViolation(f"{path}.kind", f"{instruction.kind!r} is not one of {_KINDS}")
@@ -1305,7 +1329,7 @@ def validate_schema(schema: IsaSchema) -> list[SchemaViolation]:
         ):
             problems.append(
                 SchemaViolation(
-                    f"{path}.accumulate", "a MAC instruction must declare accumulate (FR-016)"
+                    f"{path}.accumulate", "a MAC instruction must declare accumulate"
                 )
             )
         if instruction.accumulate is not None:
@@ -1313,7 +1337,7 @@ def validate_schema(schema: IsaSchema) -> list[SchemaViolation]:
                 problems.append(
                     SchemaViolation(
                         f"{path}.accumulate.order",
-                        "missing order makes the emulator's tolerance unfalsifiable (T-5)",
+                        "missing order makes the emulator's tolerance unfalsifiable",
                     )
                 )
             elif instruction.accumulate.order not in _ORDERS:
@@ -1332,6 +1356,27 @@ def validate_schema(schema: IsaSchema) -> list[SchemaViolation]:
                             f"{path}.tile.{axis}", f"tile {axis} must be >= 1, is {value}"
                         )
                     )
+        if instruction.rule in ("memory", "async_copy"):
+            known_spaces = {space.name for space in schema.data_model.memory_spaces} | {"register"}
+            if instruction.transfers is None:
+                problems.append(
+                    SchemaViolation(
+                        f"{path}.transfers",
+                        "a memory instruction must declare which spaces it moves data between "
+                        "(use an empty list for one that moves none)",
+                    )
+                )
+            else:
+                for src, dst in instruction.transfers:
+                    for space_name in (src, dst):
+                        if space_name not in known_spaces:
+                            problems.append(
+                                SchemaViolation(
+                                    f"{path}.transfers",
+                                    f"space {space_name!r} is not declared in data_model "
+                                    f"(known: {sorted(known_spaces)})",
+                                )
+                            )
         if instruction.constraint is not None:
             undefined = sorted(
                 term for term in instruction.constraint.terms if term not in _KNOWN_TERMS
@@ -1354,16 +1399,54 @@ def validate_schema(schema: IsaSchema) -> list[SchemaViolation]:
                     ) else evaluate(instruction.constraint, descriptor)
                 except PredicateError as error:
                     problems.append(SchemaViolation(f"{path}.constraint", str(error)))
-        if instruction.cost is not None:
-            undefined = sorted(
-                term for term in instruction.cost.terms if term not in _KNOWN_COST_TERMS
-            )
-            if undefined:
-                problems.append(
-                    SchemaViolation(
-                        f"{path}.cost", f"references undefined term(s): {', '.join(undefined)}"
-                    )
+        for cexpr, field_name in (
+            (instruction.cost, "cost"),
+            (getattr(instruction, "select_cost", None), "select_cost"),
+            (instruction.time, "time"),
+        ):
+            if cexpr is not None:
+                undefined = sorted(
+                    term for term in cexpr.terms if not is_known_cost_term(term)
                 )
+                if undefined:
+                    problems.append(
+                        SchemaViolation(
+                            f"{path}.{field_name}", f"references undefined term(s): {', '.join(undefined)}"
+                        )
+                    )
+        # Task A6: semantics must be present and parseable
+        if not instruction.semantics or not is_parseable(instruction.semantics):
+            problems.append(
+                SchemaViolation(
+                    f"{path}.semantics",
+                    f"instruction has missing or unparseable semantics: {instruction.semantics!r}",
+                )
+            )
+
+        # Task C1: check that declared op entries can actually be expressed by instruction semantics
+        if getattr(instruction, "ops", None) and instruction.semantics:
+            sem = instruction.semantics.lower()
+            unexpressible_by_arithmetic = {
+                "constant", "get_program_id", "make_range", "splat",
+                "cmpi", "select", "expand_dims", "broadcast"
+            }
+            for op in instruction.ops:
+                op_str = str(op).lower()
+                if op_str in unexpressible_by_arithmetic and op_str not in sem and not (op_str == "constant" and "value" in sem):
+                    problems.append(
+                        SchemaViolation(
+                            f"{path}.op",
+                            f"op {op!r} cannot be expressed by semantics {instruction.semantics!r}",
+                        )
+                    )
+                elif ("+" in sem or "add" in sem) and "*" not in sem and "/" not in sem and "-" not in sem and "%" not in sem:
+                    if op_str in ("mul", "mulf", "muli", "div", "divsi", "divui", "sub", "subf", "subi", "mod", "remsi", "remui"):
+                        problems.append(
+                            SchemaViolation(
+                                f"{path}.op",
+                                f"op {op!r} cannot be expressed by addition semantics {instruction.semantics!r}",
+                            )
+                        )
     return problems
 
 
@@ -1415,8 +1498,9 @@ class _ValidationDescriptor:
         self.shape = ()
 
 
-#: The term vocabulary of data-model §1.2. A predicate naming anything else is
-#: undefined *by the document*, and EC-070 wants that named.
+#: The term vocabulary the predicate language recognizes. A predicate naming
+#: anything else is undefined, and that must be named as such rather than
+#: silently resolving to `unknown`.
 _KNOWN_TERMS = frozenset(
     {
         "shape",
@@ -1434,7 +1518,7 @@ _KNOWN_TERMS = frozenset(
         "acc_dtype",
         "op_dtype",
         "rank",
-        # The MAC's pointer operands (data-model §1.1): `aligned(a_base, 4)`.
+        # The MAC's pointer operands: `aligned(a_base, 4)`.
         # They resolve through the allocator contract in `aligned`, and are
         # unknown as arithmetic values.
         "a_base",
@@ -1446,7 +1530,41 @@ _KNOWN_TERMS = frozenset(
         "block_scale_size",
     }
 )
-_KNOWN_COST_TERMS = frozenset({"words", "elements", "m", "n", "k"})
+_KNOWN_COST_TERMS = frozenset({
+    "words",
+    "elements",
+    "bytes",
+    "transactions",
+    "coalescing_efficiency",
+    "bank_conflicts",
+    "contiguous",
+    "alignment",
+    "m",
+    "n",
+    "k",
+    "mac_ops",
+    "trip_count",
+    "stride",
+    "size",
+    "offset",
+    "shape",
+    "base",
+    "length",
+})
+
+
+def is_known_cost_term(term: str) -> bool:
+    if term in _KNOWN_COST_TERMS:
+        return True
+    if term.startswith("machine."):
+        return True
+    try:
+        from .cost import term_registry
+        if term in term_registry():
+            return True
+    except Exception:
+        pass
+    return False
 
 #: Terms that name allocated addresses rather than descriptor fields.
 _POINTER_TERMS = frozenset({"base", "a_base", "b_base"})
