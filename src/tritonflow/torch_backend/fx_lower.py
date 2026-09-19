@@ -40,36 +40,79 @@ import numpy as np
 
 from ..emit.ir import Imm, Instr, MemRef, Program, SourceRef, SsaRef
 from ..emu.exec import ProgramNotExecutable, emulate
-from ..emu.precision import PrecisionPolicy
+from ..emu.precision import TF32_EXPLICIT_MANTISSA_BITS, PrecisionPolicy
 from ..isa.schema import load_builtin
-from ..isa.select import select
+from ..isa.select import _matches_op, select
 from ..recognize.descriptor import AccessDescriptor
 
 __all__ = ["FxLowering", "lower_fx_graph", "supported_targets"]
 
-#: aten target -> (schema rule, the `arith.*`/`tt.*` name the emulator dispatches
-#: on, the short alias the schemas use in their `op:` lists). None of these is an
-#: instruction name: they name the *operation*, and the schema decides which of
-#: its own instructions serves it.
-#:
-#: Two spellings are carried because the schemas disagree: tritonflow1 writes
-#: `op: [add, relu]` while vortex writes `op: [arith.addf]`. Matching either is
-#: the alternative to editing three schemas to agree on a convention that the
-#: selector never required in the first place.
-_ATEN: dict[str, tuple[str, str, str]] = {
-    "add": ("elementwise", "arith.addf", "add"),
-    "add_": ("elementwise", "arith.addf", "add"),
-    "mul": ("elementwise", "arith.mulf", "mul"),
-    "sub": ("elementwise", "arith.subf", "sub"),
-    "relu": ("elementwise", "arith.maxnumf", "relu"),
-    "mm": ("mac", "tt.dot", "dot"),
-    "matmul": ("mac", "tt.dot", "dot"),
+#: torch/aten call target (name only, no overload) -> (schema rule, TTIR op it
+#: means). This table is *naming only*: it says what an operation is, never
+#: whether a chip can do it. Support is decided per node by asking the loaded
+#: schema whether any instruction claims the op (`schema_claims`), so adding an
+#: op to a schema makes the backend accept it, and removing one makes it refuse.
+_TORCH_TARGETS: dict[str, tuple[str, str]] = {
+    "add": ("elementwise", "arith.addf"),
+    "add_": ("elementwise", "arith.addf"),
+    "sub": ("elementwise", "arith.subf"),
+    "subtract": ("elementwise", "arith.subf"),
+    "mul": ("elementwise", "arith.mulf"),
+    "multiply": ("elementwise", "arith.mulf"),
+    "div": ("elementwise", "arith.divf"),
+    "div_": ("elementwise", "arith.divf"),
+    "truediv": ("elementwise", "arith.divf"),
+    "true_divide": ("elementwise", "arith.divf"),
+    "neg": ("elementwise", "arith.negf"),
+    "negative": ("elementwise", "arith.negf"),
+    "abs": ("elementwise", "math.absf"),
+    "absolute": ("elementwise", "math.absf"),
+    "relu": ("elementwise", "arith.maxnumf"),
+    "maximum": ("elementwise", "arith.maxnumf"),
+    "minimum": ("elementwise", "arith.minnumf"),
+    "clamp": ("elementwise", "tt.clamp"),
+    "clamp_": ("elementwise", "tt.clamp"),
+    "clip": ("elementwise", "tt.clamp"),
+    "exp": ("elementwise", "math.exp"),
+    "mm": ("mac", "tt.dot"),
+    "matmul": ("mac", "tt.dot"),
 }
 
+#: Precision the emulator runs a lowered matmul at, and the one the tolerance is
+#: derived for. One constant, used by both, so they cannot drift apart.
+MATMUL_PRECISION = "ieee"
 
-def supported_targets() -> tuple[str, ...]:
-    """The aten operations this proof of concept lowers, for a coverage report."""
-    return tuple(sorted(_ATEN))
+#: Fixed seed for the second, randomised verification input.
+VERIFY_SEED = 24173
+
+
+def _target_name(target: Any) -> str:
+    raw = getattr(target, "__name__", str(target))
+    if raw.startswith("aten."):
+        raw = raw[len("aten."):]
+    return raw.split(".")[0]
+
+
+def schema_claims(schema: Any, rule: str, source_op: str) -> bool:
+    """Does any instruction of `schema` claim `source_op`? (exact op match, as selection uses.)"""
+    instructions = schema.of_kind(rule)
+    if rule == "mac":
+        return bool(instructions)
+    return any(
+        _matches_op(entry, source_op)
+        for instruction in instructions
+        for entry in getattr(instruction, "ops", ())
+    )
+
+
+def supported_targets(isa_name: str | None = None) -> tuple[str, ...]:
+    """Torch operation names this backend can name; with `isa_name`, only those the schema claims."""
+    if isa_name is None:
+        return tuple(sorted(_TORCH_TARGETS))
+    schema = load_builtin(isa_name)
+    return tuple(
+        sorted(name for name, (rule, op) in _TORCH_TARGETS.items() if schema_claims(schema, rule, op))
+    )
 
 
 @dataclass
@@ -89,21 +132,27 @@ class FxLowering:
     #: Every selection made, as `(node, rule, chosen, rejected...)`. Kept because
     #: "the generator chose" is only a claim if the alternatives are visible.
     decisions: list[str] = field(default_factory=list)
+    shadow_verified: bool = False
+    #: Which inputs the emulated result was compared on: "example", "seed=<n>".
+    verified_inputs: tuple[str, ...] = ()
+    mismatch_reason: str | None = None
 
     @property
     def fully_lowered(self) -> bool:
-        return not self.refusals and not self.program.markers()
+        return (
+            not self.refusals
+            and not self.program.markers()
+            and self.shadow_verified
+            and self.mismatch_reason is None
+        )
 
     def run(self, tensors: Sequence[Any]) -> np.ndarray:
         """Execute the program over `tensors`, in placeholder order."""
         storage: dict[str, Any] = {}
         for name, tensor in zip(self.inputs, tensors, strict=False):
-            storage[name] = np.asarray(
-                tensor.detach().cpu().numpy() if hasattr(tensor, "detach") else tensor,
-                dtype=np.float32,
-            )
+            storage[name] = _as_numpy(tensor)
         storage[self.output] = np.zeros(self.output_shape or (1,), dtype=np.float32)
-        produced = emulate(self.program, storage, policy=PrecisionPolicy(input_precision="ieee"))
+        produced = emulate(self.program, storage, policy=PrecisionPolicy(input_precision=MATMUL_PRECISION))
         return produced[self.output]
 
 
@@ -146,6 +195,7 @@ def _choose(
     direction: str | None = None,
     base: str = "%fx",
     names: frozenset[str] = frozenset(),
+    k: int | None = None,
 ):
     """Select an instruction of `rule` for a whole-tensor access. Returns a report.
 
@@ -159,20 +209,15 @@ def _choose(
     tile = tuple(shape) if rule == "mac" else None
     env = {"words": int(np.prod(shape or (1,)))}
     if rule == "mac" and len(shape) == 2:
-        env.update({"m": shape[0], "n": shape[1], "k": shape[1]})
+        if k is None:
+            raise ValueError("a matmul selection needs the reduction length k")
+        env.update({"m": shape[0], "n": shape[1], "k": int(k)})
     report = select(schema, rule, descriptor, tile, env, direction)
     admissible = [c for c in report.candidates if c.admissible and c.cost is not None]
-    # An instruction that declares `op:` can only serve the operations it names.
-    # Vortex's elementwise units all share one rule and one cost, so without this
-    # the minimum-cost rule broke the tie by declaration order and chose VADD for
-    # relu -- and the emulator, which dispatches those by instruction name,
-    # computed an addition and returned a wrong answer with no diagnostic. An
-    # instruction that declares no `op:` serves anything, so tritonflow1's catch-all
-    # EPI and tritonflow2's VPU are unaffected.
     if names:
         declared = [c for c in admissible if getattr(c.instruction, "ops", ())]
         if declared:
-            admissible = [c for c in declared if names & set(c.instruction.ops)]
+            admissible = [c for c in declared if any(_matches_op(op_entry, n) for op_entry in c.instruction.ops for n in names)]
     if not admissible:
         return None, report
     best = min(admissible, key=lambda c: (c.cost, c.instruction.declaration_index))
@@ -189,6 +234,166 @@ def _decision_line(node_name: str, rule: str, best: Any, report: Any) -> str:
         f"{node_name}: {rule} -> {best.instruction.name} cost={best.cost:g}"
         + (f"; rejected {', '.join(rejected)}" if rejected else "")
     )
+
+
+@dataclass(frozen=True)
+class _NodeSpec:
+    """What one lowered node computes, kept so its rounding error can be bounded."""
+
+    name: str
+    source_op: str
+    operands: dict[str, Any]
+
+
+_U = 2.0**-24  # fp32 unit roundoff
+_TF32_EPS = 2.0 ** -(TF32_EXPLICIT_MANTISSA_BITS + 1)  # half-ulp of a 10-bit mantissa
+
+
+def _fetch(operand: Any, table: dict[str, tuple[np.ndarray, np.ndarray]]) -> tuple[np.ndarray, np.ndarray]:
+    if isinstance(operand, SsaRef):
+        return table[operand.name]
+    return np.asarray(float(operand.value), dtype=np.float64), np.asarray(0.0)
+
+
+def _error_analysis(
+    specs: Sequence[_NodeSpec],
+    inputs: dict[str, np.ndarray],
+    precision: str,
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """Value in fp64 and a rigorous absolute bound on the fp32 result's error, per node.
+
+    Each op contributes one rounding (`u = 2**-24` of the computed value), exact ops
+    (neg, abs, max, min, clamp) contribute none and are 1-Lipschitz so they pass the
+    incoming bound through, and a dot product of length `k` accumulated in fp32 adds
+    `k*u/(1-k*u)` of the sum of absolute products. Under a tf32 policy each matmul
+    operand additionally carries the tf32 half-ulp. Nothing here is tuned: change the
+    graph or the precision and the bound changes with it.
+    """
+    table: dict[str, tuple[np.ndarray, np.ndarray]] = {
+        name: (np.asarray(value, dtype=np.float64), np.zeros(np.shape(value))) for name, value in inputs.items()
+    }
+    eps = _TF32_EPS if precision == "tf32" else 0.0
+    for spec in specs:
+        op = spec.source_op
+        ops = spec.operands
+        if op == "tt.dot":
+            a, ea = _fetch(ops["a"], table)
+            b, eb = _fetch(ops["b"], table)
+            k = a.shape[-1]
+            gamma = k * _U / (1.0 - k * _U)
+            reach = (np.abs(a) + ea) @ (np.abs(b) + eb)
+            value = a @ b
+            bound = np.abs(a) @ eb + ea @ np.abs(b) + ea @ eb + reach * (gamma + (2 * eps + eps * eps) * (1 + gamma))
+        else:
+            a, ea = _fetch(ops["in0"], table)
+            if op in ("arith.negf", "math.absf", "tt.clamp"):
+                if op == "arith.negf":
+                    value = -a
+                elif op == "math.absf":
+                    value = np.abs(a)
+                else:
+                    value = np.clip(a, float(ops["lo"].value), float(ops["hi"].value))
+                bound = np.broadcast_to(ea, np.shape(value)).astype(np.float64)
+            else:
+                b, eb = _fetch(ops["in1"], table)
+                if op in ("arith.maxnumf", "arith.minnumf"):
+                    value = np.maximum(a, b) if op == "arith.maxnumf" else np.minimum(a, b)
+                    bound = np.maximum(ea, eb)
+                elif op in ("arith.addf", "arith.subf"):
+                    value = a + b if op == "arith.addf" else a - b
+                    bound = ea + eb + _U * (np.abs(value) + ea + eb)
+                elif op == "arith.mulf":
+                    value = a * b
+                    bound = np.abs(a) * eb + np.abs(b) * ea + ea * eb + _U * (np.abs(value) + np.abs(a) * eb + np.abs(b) * ea + ea * eb)
+                elif op == "arith.divf":
+                    value = a / b
+                    denom = np.abs(b) - eb
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        core = (ea + np.abs(value) * eb) / denom
+                    core = np.where(denom > 0, core, np.inf)
+                    bound = core + _U * (np.abs(value) + core)
+                else:
+                    raise ValueError(f"no error model for {op!r}")
+        table[spec.name] = (value, np.asarray(bound, dtype=np.float64))
+    return table
+
+
+def _as_numpy(tensor: Any) -> np.ndarray:
+    array = tensor.detach().cpu().numpy() if hasattr(tensor, "detach") else tensor
+    return np.array(array, dtype=np.float32, copy=True)
+
+
+def _shadow_verify(
+    program: Program,
+    graph_module: Any,
+    example_inputs: Sequence[Any],
+    input_names: Sequence[str],
+    out_name: str,
+    store_shape: tuple[int, ...],
+    specs: Sequence[_NodeSpec],
+    output_value: str,
+    refusals: list[str],
+) -> tuple[bool, str | None, tuple[str, ...]]:
+    """Run the emulated program and eager torch on the example and on a seeded random input.
+
+    Eager runs on clones, so a graph containing in-place ops cannot change the
+    caller's tensors. The result must agree element for element within twice the
+    derived fp32 error bound (each side is within one bound of the exact value).
+    """
+    import torch
+
+    tensor_positions = [i for i, x in enumerate(example_inputs) if hasattr(x, "shape")]
+    rng = np.random.default_rng(VERIFY_SEED)
+    input_sets: list[tuple[str, list[np.ndarray]]] = [
+        ("example", [_as_numpy(example_inputs[i]) for i in tensor_positions]),
+        (
+            f"seed={VERIFY_SEED}",
+            [rng.standard_normal(np.shape(example_inputs[i])).astype(np.float32) for i in tensor_positions],
+        ),
+    ]
+    tiny = float(np.finfo(np.float32).tiny)
+    verified: list[str] = []
+    for label, arrays in input_sets:
+        try:
+            eager_args = list(example_inputs)
+            for pos, array in zip(tensor_positions, arrays, strict=True):
+                eager_args[pos] = torch.from_numpy(array.copy())
+            eager = graph_module(*eager_args)
+            eager = eager[0] if isinstance(eager, (tuple, list)) else eager
+            reference = np.array(eager.detach().cpu().numpy(), dtype=np.float64)
+
+            storage = {name: array.copy() for name, array in zip(input_names, arrays, strict=True)}
+            storage[out_name] = np.zeros(store_shape or (1,), dtype=np.float32)
+            emulated = emulate(program, storage, policy=PrecisionPolicy(input_precision=MATMUL_PRECISION))[out_name]
+            emulated = np.asarray(emulated, dtype=np.float64).reshape(reference.shape)
+
+            table = _error_analysis(specs, dict(zip(input_names, arrays, strict=True)), MATMUL_PRECISION)
+            if output_value not in table:
+                raise ValueError(f"output {output_value} has no error model")
+            bound = 2.0 * np.broadcast_to(table[output_value][1], reference.shape)
+        except Exception as exc:
+            reason = f"shadow verification failed to execute on {label}: {exc}"
+            refusals.append(reason)
+            return False, reason, tuple(verified)
+
+        if not (np.all(np.isfinite(reference)) and np.all(np.isfinite(emulated))):
+            reason = f"shadow verification on {label}: non-finite values, tolerance cannot be certified"
+            refusals.append(reason)
+            return False, reason, tuple(verified)
+        scale = np.maximum(np.abs(reference), tiny)
+        relative = np.abs(emulated - reference) / scale
+        allowed = bound / scale
+        if not np.all(relative <= allowed):
+            worst = int(np.argmax(relative - allowed))
+            reason = (
+                f"shadow verification mismatch on {label}: relative error "
+                f"{float(relative.reshape(-1)[worst]):.3g} exceeds the derived bound "
+                f"{float(allowed.reshape(-1)[worst]):.3g} at flat index {worst}"
+            )
+            refusals.append(reason)
+            return False, reason, tuple(verified)
+        verified.append(label)
+    return True, None, tuple(verified)
 
 
 def lower_fx_graph(
@@ -224,6 +429,7 @@ def lower_fx_graph(
     decisions: list[str] = []
     refusals: list[str] = report if report is not None else []
     lowered: list[str] = []
+    specs: list[_NodeSpec] = []
     total_cost = 0.0
     tensor_inputs = [t for t in example_inputs if hasattr(t, "shape")]
     position = 0
@@ -235,6 +441,12 @@ def lower_fx_graph(
                 refusals.append(f"{node.name}: no example tensor supplied")
                 return None
             name = f"%{node.name}"
+            if str(getattr(tensor_inputs[position], "dtype", "")) != "torch.float32":
+                refusals.append(
+                    f"{node.name}: placeholder dtype {getattr(tensor_inputs[position], 'dtype', None)} "
+                    "is not float32; the emulated machine computes in float32"
+                )
+                return None
             shapes[name] = tuple(int(d) for d in tensor_inputs[position].shape)
             input_names.append(name)
             position += 1
@@ -250,43 +462,151 @@ def lower_fx_graph(
             refusals.append(f"{node.name}: node kind {node.op!r} is not lowered")
             return None
 
-        target = getattr(node.target, "__name__", str(node.target)).split(".")[0]
-        entry = _ATEN.get(target)
-        if entry is None:
-            refusals.append(f"{node.name}: aten target {target!r} is not in the supported set")
+        # Check for unsupported kwargs:
+        if "alpha" in node.kwargs and node.kwargs["alpha"] != 1:
+            refusals.append(
+                f"{node.name}: unsupported kwarg 'alpha'={node.kwargs['alpha']!r}"
+            )
             return None
-        rule, source_op, alias = entry
+
+        if "rounding_mode" in node.kwargs and node.kwargs["rounding_mode"] is not None:
+            refusals.append(
+                f"{node.name}: unsupported kwarg 'rounding_mode'={node.kwargs['rounding_mode']!r}"
+            )
+            return None
+
+        if "out" in node.kwargs and node.kwargs["out"] is not None:
+            refusals.append(f"{node.name}: unsupported kwarg 'out'")
+            return None
+
+        if "dtype" in node.kwargs:
+            dt = node.kwargs["dtype"]
+            if dt is not None and str(dt) not in ("torch.float32", "float32", "<class 'float'>"):
+                refusals.append(f"{node.name}: unsupported non-default dtype {dt!r}")
+                return None
+
+        allowed_kwargs = {"min", "max", "alpha", "rounding_mode", "out", "dtype", "inplace"}
+        unexpected = set(node.kwargs.keys()) - allowed_kwargs
+        if unexpected:
+            refusals.append(f"{node.name}: unsupported kwargs {sorted(unexpected)}")
+            return None
+
+        target = _target_name(node.target)
+
+        entry = _TORCH_TARGETS.get(target)
+        if entry is None:
+            refusals.append(f"{node.name}: target {target!r} has no known TTIR meaning")
+            return None
+        rule, source_op = entry
+        if not schema_claims(schema, rule, source_op):
+            refusals.append(
+                f"{node.name}: {isa_name} declares no {rule} instruction serving {source_op!r}"
+            )
+            return None
+
+        # Reject unsupported positional kwargs
+        if target in ("add", "add_", "sub", "sub_") and len(node.args) > 2:
+            alpha_arg = node.args[2]
+            if alpha_arg != 1:
+                refusals.append(
+                    f"{node.name}: unsupported positional alpha={alpha_arg!r}"
+                )
+                return None
+
+        if target in ("div", "div_") and len(node.args) > 2:
+            rm_arg = node.args[2]
+            if rm_arg is not None:
+                refusals.append(
+                    f"{node.name}: unsupported positional rounding_mode={rm_arg!r}"
+                )
+                return None
 
         operands: dict[str, Any] = {}
         operand_shapes: list[tuple[int, ...]] = []
-        for index, arg in enumerate(node.args):
-            arg_name = f"%{getattr(arg, 'name', arg)}"
-            if arg_name in shapes:
-                operand_shapes.append(shapes[arg_name])
-                role = ("a", "b")[index] if rule == "mac" and index < 2 else f"in{index}"
-                operands[role] = SsaRef(arg_name)
-            elif isinstance(arg, (int, float)):
-                operands[f"in{index}"] = Imm(value=float(arg))
-            else:
+        reduction_k: int | None = None
+
+        if target in ("clamp", "clamp_"):
+            lo_val = None
+            hi_val = None
+            if len(node.args) >= 3:
+                lo_val = node.args[1]
+                hi_val = node.args[2]
+            elif "min" in node.kwargs and "max" in node.kwargs:
+                lo_val = node.kwargs["min"]
+                hi_val = node.kwargs["max"]
+            elif len(node.args) == 2 and "max" in node.kwargs:
+                lo_val = node.args[1]
+                hi_val = node.kwargs["max"]
+            elif len(node.args) == 2 and "min" in node.kwargs:
+                lo_val = node.kwargs["min"]
+                hi_val = node.args[1]
+
+            if lo_val is None or hi_val is None:
+                refusals.append(f"{node.name}: clamp requires both min and max bounds")
+                return None
+
+            try:
+                lo_f = float(lo_val)
+                hi_f = float(hi_val)
+            except (TypeError, ValueError):
+                refusals.append(
+                    f"{node.name}: clamp bounds must be numeric constants, got {lo_val!r}, {hi_val!r}"
+                )
+                return None
+
+            arg0 = node.args[0]
+            arg_name = f"%{getattr(arg0, 'name', arg0)}"
+            if arg_name not in shapes:
                 refusals.append(f"{node.name}: operand {arg_name} has no known shape")
                 return None
-
-        if rule == "mac":
-            if len(operand_shapes) != 2 or len(operand_shapes[0]) != 2:
-                refusals.append(f"{node.name}: matmul needs two 2-D operands")
-                return None
-            result_shape = (operand_shapes[0][0], operand_shapes[1][1])
-            operands["acc"] = Imm(value=0.0)
+            operand_shapes.append(shapes[arg_name])
+            operands["in0"] = SsaRef(arg_name)
+            operands["in1"] = Imm(value=lo_f)
+            operands["in2"] = Imm(value=hi_f)
+            operands["lo"] = Imm(value=lo_f)
+            operands["hi"] = Imm(value=hi_f)
+            result_shape = operand_shapes[0]
         else:
-            result_shape = operand_shapes[0] if operand_shapes else (1,)
-            if source_op == "arith.maxnumf" and len(operands) == 1:
-                # relu is max(x, 0) — the second operand is the clamp, supplied
-                # here because aten.relu is unary while the machine's maxnumf is
-                # binary. Making it explicit keeps the emulator's arithmetic
-                # table honest instead of adding a relu special case to it.
-                operands["in1"] = Imm(value=0.0)
+            for index, arg in enumerate(node.args):
+                if index >= 2 and target in ("add", "add_", "sub", "sub_", "div", "div_"):
+                    continue
+                arg_name = f"%{getattr(arg, 'name', arg)}"
+                if arg_name in shapes:
+                    operand_shapes.append(shapes[arg_name])
+                    role = ("a", "b")[index] if rule == "mac" and index < 2 else f"in{index}"
+                    operands[role] = SsaRef(arg_name)
+                elif isinstance(arg, (int, float)):
+                    operands[f"in{index}"] = Imm(value=float(arg))
+                else:
+                    refusals.append(f"{node.name}: operand {arg_name} has no known shape")
+                    return None
 
-        best, report = _choose(schema, rule, result_shape, names=frozenset({source_op, alias}))
+            if rule == "mac":
+                if len(operand_shapes) != 2 or len(operand_shapes[0]) != 2:
+                    refusals.append(f"{node.name}: matmul needs two 2-D operands")
+                    return None
+                if operand_shapes[0][1] != operand_shapes[1][0]:
+                    refusals.append(
+                        f"{node.name}: matmul inner dimensions differ {operand_shapes[0]} x {operand_shapes[1]}"
+                    )
+                    return None
+                result_shape = (operand_shapes[0][0], operand_shapes[1][1])
+                reduction_k = operand_shapes[0][1]
+                operands["acc"] = Imm(value=0.0)
+            else:
+                reduction_k = None
+                try:
+                    result_shape = tuple(np.broadcast_shapes(*operand_shapes)) if operand_shapes else (1,)
+                except ValueError:
+                    refusals.append(f"{node.name}: operand shapes {operand_shapes} do not broadcast")
+                    return None
+                if source_op == "arith.maxnumf" and len(operands) == 1:
+                    # relu is max(x, 0)
+                    operands["in1"] = Imm(value=0.0)
+
+        best, report_sel = _choose(
+            schema, rule, result_shape, base=source_op, names=frozenset({source_op}), k=reduction_k
+        )
         if best is None:
             refusals.append(
                 f"{node.name}: no admissible {rule} instruction in {isa_name} for shape {result_shape}"
@@ -295,8 +615,9 @@ def lower_fx_graph(
 
         name = f"%{node.name}"
         shapes[name] = result_shape
-        decisions.append(_decision_line(node.name, rule, best, report))
+        decisions.append(_decision_line(node.name, rule, best, report_sel))
         lowered.append(node.name)
+        specs.append(_NodeSpec(name, source_op, dict(operands)))
         total_cost += float(best.cost or 0.0)
         instrs.append(
             Instr(
@@ -312,9 +633,6 @@ def lower_fx_graph(
     if output_value is None or output_value not in shapes:
         return None
 
-    # The result is copied to a named output buffer by a selected *memory*
-    # instruction, so the program ends with a store the schema chose rather than
-    # with a dangling value.
     store_shape = shapes[output_value]
     out_name = "%fx_out"
     store, store_report = _choose(
@@ -345,6 +663,13 @@ def lower_fx_graph(
         inputs=(*input_names, out_name),
         total_cost=total_cost,
     )
+
+    shadow_verified, mismatch_reason, verified_inputs = _shadow_verify(
+        program, graph_module, example_inputs, input_names, out_name, store_shape, specs, output_value, refusals
+    )
+    if not shadow_verified:
+        return None
+
     return FxLowering(
         program=program,
         inputs=tuple(input_names),
@@ -355,6 +680,9 @@ def lower_fx_graph(
         lowered_nodes=tuple(lowered),
         refusals=refusals,
         decisions=decisions,
+        shadow_verified=shadow_verified,
+        mismatch_reason=mismatch_reason,
+        verified_inputs=verified_inputs,
     )
 
 

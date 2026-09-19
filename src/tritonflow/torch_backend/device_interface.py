@@ -42,8 +42,8 @@ artifact depend on a C++ toolchain to be *installed*, and the project's whole
 framing is that the reachable surface (Triton's IR, PyTorch's backend hook) is
 Python. The data plane stays out of scope, by measurement rather than by choice.
 
-**The slot inventory is asserted, not assumed.** `contracts/torch-seam.md` asks
-for a test that fails when PyTorch adds a slot upstream without an explicit
+**The slot inventory is asserted, not assumed.** This module keeps a test that
+fails when PyTorch adds a slot upstream without an explicit
 decision here, because a slot that silently falls back to a base-class default is
 a slot whose behaviour nobody chose. `SLOT_INVENTORY` is measured from the
 installed torch (see `measure_slot_inventory`) and `UNIMPLEMENTED` lists every
@@ -156,7 +156,7 @@ class ToyDeviceProperties:
 
     @property
     def L2_cache_size(self) -> int:
-        # The toy machine has no cache hierarchy; `data-model.md` §1.1 declares a
+        # The toy machine has no cache hierarchy; the ISA-1 model declares a
         # flat global space and nothing else. 0 states that, rather than inventing
         # a plausible number a scheduler might then trust.
         return 0

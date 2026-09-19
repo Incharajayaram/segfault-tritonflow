@@ -4,7 +4,7 @@
 the *device*, not of the framework that drives it: a flat fp32 array, a bump
 allocator, and the alignment promise the ISA schema declares. Keeping it
 framework-free means the storage rules are testable without PyTorch, and it
-means `contracts/isa-schema.md`'s `alignment_words: 4` is enforced in one place
+means the ISA schema's `alignment_words: 4` is enforced in one place
 rather than asserted in a comment.
 
 The alignment field is the reason this module exists at all. `isa/schemas/

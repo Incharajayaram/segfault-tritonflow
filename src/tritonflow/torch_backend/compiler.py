@@ -17,11 +17,10 @@ then execute on `emu/exec.py`. Nothing about that chain is stubbed, and the
 program it executes is an artifact a reader can print with `disassemble`.
 
 *The fallback path.* A graph the seam cannot lower runs on eager PyTorch and
-produces a `FallbackRecord` naming why. This is the contract's hardest rule
-(FR-025, `contracts/torch-seam.md` postcondition 4): the eager floor is
-acknowledged in writing, per graph, and never disguised. What the seam must not
-do is run eager code *and report success*, which is the custom-backend sin the
-contract names.
+produces a `FallbackRecord` naming why. This is the hardest rule this module
+follows: the eager floor is acknowledged in writing, per graph, and never
+disguised. What the seam must not do is run eager code *and report success*,
+which is the custom-backend sin this discipline exists to avoid.
 
 **Where the TTIR comes from, and in what order.** Read off the graph, Inductor
 produces *Python source for a Triton kernel*; the TTIR this pipeline consumes
@@ -68,7 +67,7 @@ from torch._dynamo.backends.registry import register_backend
 from ..emit.assemble import assemble
 from ..emit.ir import Program
 from ..emu.exec import ProgramNotExecutable, UnsupportedInstruction, emulate
-from ..emu.precision import PrecisionPolicy
+from ..emu.precision import PrecisionPolicy, tf32_truncate
 from ..extract import (
     Extracted,
     ExtractionError,
@@ -316,12 +315,29 @@ class LoweringPlan:
     def fully_lowered(self) -> bool:
         """Every operation in this graph ran on the ISA.
 
-        A multi-node graph counts through its per-node counters, because the
-        interpreter returns callables rather than `CompiledKernel`s: without that,
-        an MLP whose every matmul lowered would report `fully_lowered = false`
-        purely because of how the lowering was represented.
+        Cannot be true while any node fell back to eager.
         """
-        return (bool(self.lowered) or self.node_lowerings > 0) and not self.fallbacks
+        has_lowering = bool(self.lowered) or self.node_lowerings > 0
+        no_fallbacks = self.node_fallbacks == 0 and len(self.fallbacks) == 0
+        return has_lowering and no_fallbacks
+
+    def compilation_summary(self) -> dict[str, Any]:
+        """A per-compilation summary: nodes lowered, nodes fallen back, with causes."""
+        n_lowered = len(self.lowered) if self.lowered else self.node_lowerings
+        n_fallen_back = self.node_fallbacks
+        total = n_lowered + n_fallen_back
+        fraction = (n_lowered / total) if total > 0 else 0.0
+        return {
+            "fully_lowered": self.fully_lowered,
+            "nodes_lowered": n_lowered,
+            "nodes_fallen_back": n_fallen_back,
+            "total_nodes": total,
+            "lowered_fraction": fraction,
+            "fallback_causes": [
+                {"stage": f.stage, "nodes": list(f.nodes), "reason": f.reason}
+                for f in self.fallbacks
+            ],
+        }
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -815,7 +831,7 @@ ELEMENTWISE_TARGETS = frozenset({"relu", "relu_"})
 #: matmul lowering", and folding `add` into it would let a `mm -> add` graph
 #: claim the add was lowered when the runner only replays relu. Two sets, two
 #: meanings, and the split is what keeps the second one from becoming a lie.
-EXTRACTABLE_ELEMENTWISE = frozenset({"relu", "relu_", "neg", "add", "sub", "mul", "div"})
+EXTRACTABLE_ELEMENTWISE = frozenset({"relu", "relu_", "neg", "add", "sub", "mul", "div", "abs", "clamp"})
 
 
 def _elementwise_kwargs_ok(kwargs: Mapping[str, Any]) -> bool:
@@ -836,7 +852,7 @@ def _elementwise_kwargs_ok(kwargs: Mapping[str, Any]) -> bool:
     return True
 
 #: The unary subset of the above, which binds one operand instead of two.
-_UNARY_ELEMENTWISE = frozenset({"relu", "relu_", "neg"})
+_UNARY_ELEMENTWISE = frozenset({"relu", "relu_", "neg", "abs"})
 
 
 def extraction_candidate(
@@ -855,20 +871,23 @@ def extraction_candidate(
     tensor_shapes = [
         tuple(t.shape) for t in example_inputs if isinstance(t, torch.Tensor)
     ]
-    if len(meaningful) == 1 and len(meaningful) == len(targets):
-        # One computational node with one or two tensor operands and nothing else.
-        # Deliberately broader than `EXTRACTABLE_ELEMENTWISE`: Path 2 exists for the
-        # ops Path 1 has *no* kernel for, and gating this on Path 1's own op list
-        # meant the FlagGems bridge could never be handed anything it might know.
-        # The op name is still checked against nothing here — the stages are what
-        # decide, and they say why.
-        tensors = [t for t in example_inputs if isinstance(t, torch.Tensor)]
-        if any(not isinstance(t, torch.Tensor) for t in example_inputs):
-            return None
-        if len(tensors) not in (1, 2):
-            return None
+    if len(meaningful) == 1 and len(meaningful) == len(targets) and meaningful[0] not in MATMUL_TARGETS:
+        # One computational node with tensor/scalar operands.
         op = "relu" if meaningful[0] == "relu_" else meaningful[0]
-        return op, [tuple(t.shape) for t in tensors], False
+        converted = [
+            t if isinstance(t, torch.Tensor) else torch.tensor(t, dtype=torch.float32)
+            for t in example_inputs
+            if isinstance(t, (torch.Tensor, int, float))
+        ]
+        max_ops = 3 if op == "clamp" else 2
+        if not (1 <= len(converted) <= max_ops):
+            return None
+        max_t = max(converted, key=lambda x: x.dim())
+        dominant_shape = tuple(max_t.shape)
+        for t in converted:
+            if tuple(t.shape) != dominant_shape and t.numel() != 1:
+                return None
+        return op, [dominant_shape for _ in converted], False
     matmuls = [name for name in meaningful if name in MATMUL_TARGETS]
     others = [
         name
@@ -1196,6 +1215,77 @@ def plan_graph(graph: Any, example_inputs: Sequence[torch.Tensor]) -> LoweringPl
         plan.fallbacks.clear()
         return plan
 
+    # Check for unsupported kwargs on computational nodes
+    for node in graph.graph.nodes:
+        if node.op in ("placeholder", "output", "get_attr"):
+            continue
+        if "alpha" in node.kwargs and node.kwargs["alpha"] != 1:
+            plan.fallbacks.append(
+                FallbackRecord(
+                    reason=f"{node.name}: unsupported kwarg 'alpha'={node.kwargs['alpha']!r}",
+                    stage="extract",
+                    nodes=nodes,
+                    detail=NOT_EXTRACTED,
+                )
+            )
+            return plan
+        if "rounding_mode" in node.kwargs and node.kwargs["rounding_mode"] is not None:
+            plan.fallbacks.append(
+                FallbackRecord(
+                    reason=f"{node.name}: unsupported kwarg 'rounding_mode'={node.kwargs['rounding_mode']!r}",
+                    stage="extract",
+                    nodes=nodes,
+                    detail=NOT_EXTRACTED,
+                )
+            )
+            return plan
+        if "out" in node.kwargs and node.kwargs["out"] is not None:
+            plan.fallbacks.append(
+                FallbackRecord(
+                    reason=f"{node.name}: unsupported kwarg 'out'",
+                    stage="extract",
+                    nodes=nodes,
+                    detail=NOT_EXTRACTED,
+                )
+            )
+            return plan
+        if "dtype" in node.kwargs:
+            dt = node.kwargs["dtype"]
+            if dt is not None and str(dt) not in ("torch.float32", "float32", "<class 'float'>"):
+                plan.fallbacks.append(
+                    FallbackRecord(
+                        reason=f"{node.name}: unsupported non-default dtype {dt!r}",
+                        stage="extract",
+                        nodes=nodes,
+                        detail=NOT_EXTRACTED,
+                    )
+                )
+                return plan
+        t_raw = getattr(node.target, "__name__", str(node.target))
+        if t_raw.startswith("aten."):
+            t_raw = t_raw[len("aten."):]
+        t_name = t_raw.split(".")[0]
+        if t_name in ("add", "add_", "sub", "sub_") and len(node.args) > 2 and node.args[2] != 1:
+            plan.fallbacks.append(
+                FallbackRecord(
+                    reason=f"{node.name}: unsupported positional alpha={node.args[2]!r}",
+                    stage="extract",
+                    nodes=nodes,
+                    detail=NOT_EXTRACTED,
+                )
+            )
+            return plan
+        if t_name in ("div", "div_") and len(node.args) > 2 and node.args[2] is not None:
+            plan.fallbacks.append(
+                FallbackRecord(
+                    reason=f"{node.name}: unsupported positional rounding_mode={node.args[2]!r}",
+                    stage="extract",
+                    nodes=nodes,
+                    detail=NOT_EXTRACTED,
+                )
+            )
+            return plan
+
     # 2. Extraction, then the FlagGems bridge. Path 1 comes first because it is
     #    the one that works for shapes nobody recorded; Path 2 next because
     #    FlagGems is opt-in. Both say why they could not help, and *every* reason
@@ -1287,6 +1377,48 @@ def _is_matmul_only_graph(targets: Sequence[str]) -> bool:
     return len(matmuls) >= 1 and len(others) == 0
 
 
+def _matmul_reference(target: Any, args: Sequence[Any], kwargs: dict[str, Any], k: int, precision: str):
+    """fp64 value of a matmul-family node and the absolute bound on an fp32 machine's error.
+
+    Operands are rounded to tf32 first when `precision` is tf32 (that rounding is
+    what the machine does, so it belongs to the reference). The remaining error is
+    fp32 accumulation, `k*u/(1-k*u)` of the sum of absolute products, and one
+    rounding of the (bias-added) result.
+    """
+    name = getattr(target, "__name__", str(target))
+    if kwargs and any(v not in (None, 1) for key, v in kwargs.items() if key in ("beta", "alpha")):
+        raise ValueError("beta/alpha scaling is not modelled")
+
+    def operand(x: torch.Tensor) -> np.ndarray:
+        array = x.detach().cpu().numpy().astype(np.float32)
+        return (tf32_truncate(array) if precision == "tf32" else array).astype(np.float64)
+
+    tensors = [a for a in args if isinstance(a, torch.Tensor)]
+    bias = None
+    if name == "linear":
+        x, w = tensors[0], tensors[1]
+        bias = tensors[2].detach().cpu().numpy().astype(np.float64) if len(tensors) > 2 else None
+        lhs, rhs = operand(x), operand(w).T
+    elif name == "addmm":
+        bias = tensors[0].detach().cpu().numpy().astype(np.float64)
+        lhs, rhs = operand(tensors[1]), operand(tensors[2])
+    elif name in ("mm", "matmul"):
+        lhs, rhs = operand(tensors[0]), operand(tensors[1])
+    else:
+        raise ValueError(f"unknown matmul-family target {name!r}")
+    if lhs.ndim != 2 or rhs.ndim != 2 or lhs.shape[1] != rhs.shape[0]:
+        raise ValueError("operands are not a conforming 2-D pair")
+    u = 2.0**-24
+    gamma = k * u / (1.0 - k * u)
+    product = lhs @ rhs
+    reach = np.abs(lhs) @ np.abs(rhs)
+    value = product if bias is None else product + bias
+    bound = gamma * reach + u * (np.abs(value) + gamma * reach)
+    if bias is not None:
+        bound = bound + u * np.abs(bias)
+    return value, bound
+
+
 def _multi_kernel_interpret(
     graph: Any,
     example_inputs: Sequence[torch.Tensor],
@@ -1319,7 +1451,7 @@ def _multi_kernel_interpret(
         kept. The previous version wrapped the attempt in `except Exception: pass`
         and incremented a counter nobody read, so a graph whose every matmul
         failed to lower produced a plan indistinguishable from one that lowered
-        all of them (FR-025).
+        all of them.
         """
         node = (target_name,)
         M, K = int(x_input.shape[0]), int(x_input.shape[1])
@@ -1346,7 +1478,54 @@ def _multi_kernel_interpret(
         )
         return None
 
+    def _demote(target_name: str, mismatch: str) -> None:
+        """A node whose lowered result disagreed with eager ran in PyTorch after all."""
+        counters["eager"] += 1
+        eager_nodes.append(target_name)
+        records.append(FallbackRecord(reason=mismatch, stage="shadow", nodes=(target_name,)))
+
     class TritonFlowInterpreter(Interpreter):
+        def _shadow(self, result, target, args, kwargs, matmul):
+            """`(value to return, mismatch reason or None)` for one lowered node.
+
+            The eager reference runs on clones (an in-place target must not change the
+            caller's tensors twice). A single elementwise op is exact or one correctly
+            rounded fp32 operation on each side, so lowered and eager must agree within
+            `2 * 2**-24` relative. A matmul is compared with an fp64 product of the
+            operands *as the machine sees them* (rounded to tf32 when the kernel
+            declares tf32), within the fp32 accumulation bound `gamma_k * sum|a*b|`
+            plus one rounding of the result: the format's own error is part of the
+            reference, so it does not widen the tolerance. On a mismatch the eager
+            value is what the graph returns.
+            """
+            eager_args = tuple(a.detach().clone() if isinstance(a, torch.Tensor) else a for a in args)
+            eager_kwargs = {
+                key: (v.detach().clone() if isinstance(v, torch.Tensor) else v) for key, v in kwargs.items()
+            }
+            eager = Interpreter.call_function(self, target, eager_args, eager_kwargs)
+            got = result.detach().cpu().double().numpy()
+            want = eager.detach().cpu().double().numpy()
+            if got.shape != want.shape:
+                return eager, f"lowered result shape {got.shape} != eager shape {want.shape}"
+            if not (np.isfinite(got).all() and np.isfinite(want).all()):
+                return eager, "non-finite values: the lowered result cannot be certified against eager"
+            if matmul is None:
+                diff = np.abs(got - want)
+                if bool(np.all(diff <= 2.0 * 2.0**-24 * np.abs(want))):
+                    return result, None
+                return eager, f"lowered result disagrees with eager: max error {float(diff.max()):.3g} exceeds 2*2^-24 relative"
+            try:
+                reference, bound = _matmul_reference(target, args, kwargs, *matmul)
+            except ValueError as exc:
+                return eager, f"no derived reference for this matmul: {exc}"
+            diff = np.abs(got - reference)
+            if bool(np.all(diff <= bound)):
+                return result, None
+            return eager, (
+                f"lowered result disagrees with the {matmul[1]} reference: max error "
+                f"{float(diff.max()):.3g} exceeds the derived bound {float(np.max(bound)):.3g}"
+            )
+
         def call_function(self, target, args, kwargs):
             target_name = getattr(target, "__name__", str(target))
             tensor_args = [a for a in args if isinstance(a, torch.Tensor)]
@@ -1360,20 +1539,36 @@ def _multi_kernel_interpret(
             if target_name in EXTRACTABLE_ELEMENTWISE and _elementwise_kwargs_ok(kwargs):
                 op = "relu" if target_name == "relu_" else target_name
                 unary = target_name in _UNARY_ELEMENTWISE
-                arity_ok = len(tensor_args) == (1 if unary else 2)
-                same_shape = len({tuple(t.shape) for t in tensor_args}) == 1
-                if arity_ok and same_shape and tensor_args:
-                    shapes = [tuple(t.shape) for t in tensor_args]
-                    kernels, record = _extract_dynamic(op, shapes, False, (target_name,))
-                    if kernels:
-                        try:
-                            result = _run_with_padding(kernels[0], list(tensor_args), op, False)
-                            counters["lowered"] += 1
-                            return result
-                        except _REFUSALS as exc:
-                            records.append(_refusal_record(exc, (target_name,)))
-                    elif record is not None:
-                        records.append(record)
+                converted_args = [
+                    a if isinstance(a, torch.Tensor) else torch.tensor(a, dtype=torch.float32)
+                    for a in args
+                    if isinstance(a, (torch.Tensor, int, float))
+                ]
+                expected_arity = 1 if unary else (3 if op == "clamp" else 2)
+                arity_ok = len(converted_args) == expected_arity
+                if arity_ok and converted_args:
+                    max_t = max(converted_args, key=lambda x: x.dim())
+                    dominant_shape = tuple(max_t.shape)
+                    can_shape = all(
+                        tuple(t.shape) == dominant_shape or t.numel() == 1
+                        for t in converted_args
+                    )
+                    if can_shape:
+                        shapes = [dominant_shape for _ in converted_args]
+                        kernels, record = _extract_dynamic(op, shapes, False, (target_name,))
+                        if kernels:
+                            try:
+                                result = _run_with_padding(kernels[0], converted_args, op, False)
+                                value, mismatch = self._shadow(result, target, args, kwargs, None)
+                                if mismatch is None:
+                                    counters["lowered"] += 1
+                                    return value
+                                _demote(target_name, mismatch)
+                                return value
+                            except _REFUSALS as exc:
+                                records.append(_refusal_record(exc, (target_name,)))
+                        elif record is not None:
+                            records.append(record)
 
             if target_name in MATMUL_TARGETS:
                 two_d = [t for t in tensor_args if t.dim() == 2]
@@ -1394,8 +1589,12 @@ def _multi_kernel_interpret(
                             result = _run_with_padding(
                                 kernel, list(tensor_args), target_name, has_relu=False
                             )
-                            counters["lowered"] += 1
-                            return result
+                            value, mismatch = self._shadow(result, target, args, kwargs, (int(x_input.shape[1]), kernel.input_precision))
+                            if mismatch is None:
+                                counters["lowered"] += 1
+                                return value
+                            _demote(target_name, mismatch)
+                            return value
                         except _REFUSALS as exc:
                             # A node the machine refused *after* selection accepted it
                             # is a fact about that node, and it is recorded as one —
@@ -1407,7 +1606,30 @@ def _multi_kernel_interpret(
                             records.append(_refusal_record(exc, (target_name,)))
             counters["eager"] += 1
             eager_nodes.append(target_name)
+            records.append(
+                FallbackRecord(
+                    reason=f"operation {target_name} is unsupported for device lowering",
+                    stage="node",
+                    nodes=(target_name,),
+                )
+            )
             return super().call_function(target, args, kwargs)
+
+        def call_method(self, target, args, kwargs):
+            if target in PLUMBING_TARGETS:
+                return super().call_method(target, args, kwargs)
+            if hasattr(torch, target):
+                return self.call_function(getattr(torch, target), args, kwargs)
+            counters["eager"] += 1
+            eager_nodes.append(target)
+            records.append(
+                FallbackRecord(
+                    reason=f"method {target} is unsupported for device lowering",
+                    stage="node",
+                    nodes=(target,),
+                )
+            )
+            return super().call_method(target, args, kwargs)
 
     interp = TritonFlowInterpreter(graph)
 
@@ -1440,6 +1662,8 @@ def _multi_kernel_interpret(
         return result
 
     run.tritonflow_counters = counters  # type: ignore[attr-defined]
+    if plan is not None:
+        run.compilation_summary = plan.compilation_summary  # type: ignore[attr-defined]
     return run
 
 
@@ -1570,12 +1794,25 @@ def _bind_operands(
     tensor_list = [t for t in tensors if isinstance(t, torch.Tensor) and t.dim() >= 1]
     bias_tensor = next((t for t in tensor_list if t.dim() == 1), None)
     if kernel.flat_width is not None:
-        if not tensor_list:
+        converted: list[torch.Tensor] = []
+        for t in tensors:
+            if isinstance(t, torch.Tensor):
+                converted.append(t)
+            elif isinstance(t, (int, float)):
+                converted.append(torch.tensor(t, dtype=torch.float32))
+        if not converted:
             raise LoweringError(f"{kernel.name}: no tensor operand was supplied")
+        max_t = max(converted, key=lambda x: x.dim())
+        out_shape = tuple(max_t.shape)
+        bound_ops: list[torch.Tensor] = []
+        for t in converted[: len(kernel.inputs)]:
+            if tuple(t.shape) != out_shape:
+                t = t.expand(out_shape).contiguous() if out_shape else t.reshape(())
+            bound_ops.append(t)
         return _Bound(
-            operands=list(tensor_list[: len(kernel.inputs)]),
+            operands=bound_ops,
             bias=None,
-            out_shape=tuple(tensor_list[0].shape),
+            out_shape=out_shape,
         )
 
     two_d = [t for t in tensor_list if t.dim() == 2]
@@ -1725,7 +1962,7 @@ FX_ISA = "tritonflow1"
 
 @register_backend(name="tritonflow")
 def tritonflow_backend(graph: Any, example_inputs: Sequence[torch.Tensor]) -> Callable[..., Any]:
-    """The registered Dynamo backend (FR-026, SC-001).
+    """The registered Dynamo backend.
 
     Returns a callable whose *results* are the graph's results either way; what
     differs is who computed them, and that difference is recorded on the callable
@@ -1739,20 +1976,10 @@ def tritonflow_backend(graph: Any, example_inputs: Sequence[torch.Tensor]) -> Ca
     """
     plan = plan_graph(graph, example_inputs)
     kernels = list(plan.lowered)
+    targets = graph_targets(graph)
+    meaningful = [t for t in targets if t not in PLUMBING_TARGETS]
 
     if not kernels:
-        # Try multi-kernel interpret path for graphs like MLP (linear->relu->linear)
-        targets = graph_targets(graph)
-        if _is_matmul_only_graph(targets):
-            # The interpreter appends one reason per node it could not lower, so
-            # the plan reports *which* matmuls ran on the device instead of the
-            # blanket `fallbacks.clear()` that made a fully-failed graph look
-            # fully lowered.
-            run = _multi_kernel_interpret(graph, example_inputs, plan)
-            run.tritonflow_plan = plan  # type: ignore[attr-defined]
-            run.tritonflow_multi_kernel = True  # type: ignore[attr-defined]
-            return run
-
         # No recorded TTIR lowering matched. Before falling back to eager, try
         # lowering the FX graph itself (`fx_lower`): that route needs no frozen
         # TTIR, which is the whole point of it — it is the only path here that
@@ -1793,6 +2020,14 @@ def tritonflow_backend(graph: Any, example_inputs: Sequence[torch.Tensor]) -> Ca
                 )
             )
 
+        # If fx_lower did not lower the whole graph, node-by-node lowering interpreter
+        # is the primary path (Task E3).
+        if len(meaningful) > 1:
+            run = _multi_kernel_interpret(graph, example_inputs, plan)
+            run.tritonflow_plan = plan  # type: ignore[attr-defined]
+            run.tritonflow_multi_kernel = True  # type: ignore[attr-defined]
+            return run
+
         run = _eager_fallback(graph)
         run.tritonflow_plan = plan  # type: ignore[attr-defined]
         return run
@@ -1802,6 +2037,48 @@ def tritonflow_backend(graph: Any, example_inputs: Sequence[torch.Tensor]) -> Ca
     _meaningful = [t for t in _targets if t not in PLUMBING_TARGETS and t not in ELEMENTWISE_TARGETS]
     _target_name = _meaningful[0] if _meaningful else ""
     _has_relu = any(t in ELEMENTWISE_TARGETS for t in _targets)
+
+    # Shadow-verify lowered program on example_inputs
+    try:
+        shadow_tensors = [arg for arg in example_inputs if isinstance(arg, torch.Tensor)]
+        if shadow_tensors:
+            shadow_result = _run_with_padding(kernel, shadow_tensors, _target_name, _has_relu)
+            eager_res = graph(*example_inputs)
+            if isinstance(eager_res, (list, tuple)):
+                eager_res = eager_res[0]
+            if _target_name:
+                k_val = int(shadow_tensors[0].shape[-1]) if shadow_tensors[0].dim() >= 2 else 1
+                derived_tol = float(k_val * (2.0 * 2.0**-11 + 2.0**-24))
+            else:
+                derived_tol = float(2.0**-24)
+            peak = max(1e-9, float(eager_res.detach().abs().max()))
+            rel_err = float((shadow_result.detach() - eager_res.detach()).abs().max()) / peak
+            if rel_err > derived_tol:
+                plan.fallbacks.append(
+                    FallbackRecord(
+                        reason=f"shadow verification mismatch: relative error {rel_err:g} exceeds derived tolerance {derived_tol:g}",
+                        stage="shadow-verify",
+                        nodes=plan.nodes,
+                    )
+                )
+                plan.lowered.clear()
+    except _REFUSALS as exc:
+        plan.fallbacks.append(_refusal_record(exc, plan.nodes))
+        plan.lowered.clear()
+    except Exception as exc:
+        plan.fallbacks.append(
+            FallbackRecord(
+                reason=f"shadow verification failed: {exc}",
+                stage="shadow-verify",
+                nodes=plan.nodes,
+            )
+        )
+        plan.lowered.clear()
+
+    if not plan.lowered:
+        run = _eager_fallback(graph)
+        run.tritonflow_plan = plan
+        return run
 
     def run(*args: Any) -> Any:
         tensors = [arg for arg in args if isinstance(arg, torch.Tensor)]
@@ -1835,7 +2112,7 @@ def verify_device() -> dict[str, Any]:
     The assertions that matter are PyTorch's own lookups, not this function's
     return value: `get_interface_for_device("tritonflow")` must resolve to this class,
     the backend must appear in `list_backends()`, and the device-state round trip
-    (SC-001's `current_device`/`set_device`) must actually move. Everything the
+ ('s `current_device`/`set_device`) must actually move. Everything the
     return value reports is read back out of PyTorch, so a wrong claim here is
     visible in the check that consumes it.
     """
