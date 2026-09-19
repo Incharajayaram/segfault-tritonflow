@@ -1,8 +1,8 @@
-"""`emulate` / `apply` — `contracts/emulator.md` (T011).
+"""`emulate` / `apply` — executes the emitted instruction stream.
 
 The emulator is a small machine that consumes the **emitted instruction stream**
 and nothing else. It never opens the TTIR module: the artifact under test is the
-program (postcondition 1), and an emulator that "knows" it is looking at a
+program, and an emulator that "knows" it is looking at a
 matmul would agree with the reference by construction and validate nothing.
 
 Three model decisions, stated up front because every line below depends on them.
@@ -30,10 +30,8 @@ would be fixed by giving `EPI` an `op` role the way `MAC8` has a tile:
 * the elementwise op is read from `SourceRef.op_name`;
 * a result shape is read from the descriptor recorded in `Instr.constrained_on`
   (`sizes=[…]`), because the program carries no shape table;
-* `arith.cmpi`'s comparison predicate is not recorded anywhere, so a maskcompare
-    "arith.cmpf": _cmpf,
-    "arith.select": _select,
-  is executed as the signed less-than the corpus uses.
+* `arith.cmpi` / `arith.cmpf` carry their predicate as an integer `predicate` operand (the
+  MLIR enum value); a compare without one is refused, never defaulted.
 
 Each is a *documented constraint of the current artifact*, checkable by reading
 the program text — not a guess the emulator makes about intent. Everything the
@@ -68,17 +66,50 @@ from .tcu import TcuEmulator
 # Legacy constants kept for backward compat with existing checks/tests that
 # import them, but `apply()` now uses schema-derived tables when available.
 MEMORY_INSTRUCTIONS = ("DMA1D", "DMA2D", "LDG", "LDS2D", "STG", "LDS", "STS", "BARRIER")
-MAC_INSTRUCTIONS = ("MAC8", "MAC16", "OPU8", "OPU32", "TCU_MMA16", "TCU_MMA32")
+MAC_INSTRUCTIONS = ("MAC8", "MAC16", "OPU8", "OPU32", "TCU_MMA16", "TCU_MMA32", "TCU_WMMA16", "TCU_WGMMA32", "TCU_WGMMA_SP32", "TCU_WGMMA_MXFP8")
 ELEMENTWISE_INSTRUCTIONS = (
     "EPI",
+    "EPI_ADD",
+    "EPI_SUB",
+    "EPI_MUL",
+    "EPI_DIV",
+    "EPI_NEG",
+    "EPI_ABS",
+    "EPI_MAX",
+    "EPI_MIN",
+    "EPI_EXPAND_DIMS",
+    "EPI_BROADCAST",
     "VPU",
+    "VPU_ADD",
+    "VPU_SUB",
+    "VPU_MUL",
+    "VPU_DIV",
+    "VPU_NEG",
+    "VPU_ABS",
+    "VPU_MAX",
+    "VPU_MIN",
+    "VPU_EXPAND_DIMS",
+    "VPU_BROADCAST",
     "CLAMP",
     "VADD",
     "VMUL",
+    "VDIV",
     "VSUB",
     "VMOD",
     "VRELU",
     "VCLAMP",
+    "VNEG",
+    "VABS",
+    "VMAX",
+    "VMIN",
+    "LI",
+    "MOVI",
+    "VEXPAND_DIMS",
+    "VBROADCAST",
+    "VSPLAT",
+    "VMAKE_RANGE",
+    "VPID",
+    "VCMP",
 )
 ELEMENTWISE_INSTRUCTION = "EPI"  # ISA-1's spelling (kept for the ISA-1 checks)
 
@@ -114,6 +145,50 @@ def _build_instruction_tables(isa_name: str) -> dict[str, set[str]]:
             "mac": set(MAC_INSTRUCTIONS),
             "elementwise": set(ELEMENTWISE_INSTRUCTIONS),
         }
+
+
+_TRANSFER_TABLES: dict[str, dict[str, tuple[tuple[str, str], ...]]] = {}
+
+
+def transfer_table(isa_name: str | None) -> dict[str, tuple[tuple[str, str], ...]]:
+    """`{instruction name: ((src space, dst space), ...)}` for one ISA's memory instructions.
+
+    This is the single source both emulators enforce. The C++ emulator has no schema
+    loader, so `emulate(use_cpp=True)` hands it this table. An unknown or unloadable
+    ISA yields an empty table, and an empty table refuses every memory access: the
+    check fails closed instead of skipping.
+    """
+    if not isa_name:
+        return {}
+    if isa_name not in _TRANSFER_TABLES:
+        from ..isa.schema import load_builtin
+
+        try:
+            schema = load_builtin(isa_name)
+        except Exception:
+            return {}
+        _TRANSFER_TABLES[isa_name] = {
+            i.name: i.transfers for i in schema.instructions.values() if i.transfers is not None
+        }
+    return _TRANSFER_TABLES[isa_name]
+
+
+def _check_space(instr: Instr, state: MachineState, ref: MemRef, side: str) -> None:
+    """`side` is "src" (the instruction reads `ref`) or "dst" (it writes `ref`)."""
+    isa_name = getattr(state, "_isa_name", None)
+    transfers = transfer_table(isa_name).get(instr.name)
+    if transfers is None:
+        raise AddressSpaceViolation(
+            f"address space violation: {instr.name} declares no transfers in schema "
+            f"{isa_name!r}, so a {ref.space!r} access cannot be verified"
+        )
+    allowed = [(s if side == "src" else d) for s, d in transfers]
+    if ref.space not in allowed:
+        verb = "reads" if side == "src" else "writes"
+        raise AddressSpaceViolation(
+            f"address space violation: {instr.name} {verb} {ref.space!r} but its schema "
+            f"transfers are {list(transfers)}"
+        )
 
 
 def _classify_instruction(instr_name: str, isa_name: str | None = None) -> str | None:
@@ -156,6 +231,10 @@ class UnsupportedInstruction(RuntimeError):
     """An instruction name this machine does not implement."""
 
 
+class AddressSpaceViolation(UnsupportedInstruction):
+    """A memory instruction touched a space its schema entry does not let it move data through."""
+
+
 class StorageError(RuntimeError):
     """A memory access outside the emulated storage — named, never zero-filled."""
 
@@ -176,6 +255,75 @@ class Storage:
     @property
     def end(self) -> int:
         return self.base + self.length
+
+
+
+
+def _eval_descriptor_expr(expr_str: str, state: Any) -> int:
+    import ast
+    expr_str = str(expr_str).strip()
+    if not expr_str:
+        return 0
+    try:
+        return int(expr_str)
+    except ValueError:
+        pass
+
+    grid = getattr(state, "grid", (0, 0, 0)) or (0, 0, 0)
+    env: dict[str, int] = {
+        "_var_pid": grid[0],
+        "_var_pid_m": grid[0],
+        "_var_pid_x": grid[0],
+        "pid": grid[0],
+        "pid_m": grid[0],
+        "pid_x": grid[0],
+        "_var_pid_n": grid[1],
+        "_var_pid_y": grid[1],
+        "pid_n": grid[1],
+        "pid_y": grid[1],
+        "_var_pid_k": grid[2] if len(grid) > 2 else 0,
+        "_var_pid_z": grid[2] if len(grid) > 2 else 0,
+        "pid_k": grid[2] if len(grid) > 2 else 0,
+        "pid_z": grid[2] if len(grid) > 2 else 0,
+    }
+    values = getattr(state, "values", {}) or {}
+    for k, v in values.items():
+        if isinstance(v, (int, np.integer)):
+            env[k.replace("%", "_var_")] = int(v)
+            env[k.replace("%", "")] = int(v)
+        elif isinstance(v, np.ndarray) and v.size == 1:
+            env[k.replace("%", "_var_")] = int(v.item())
+            env[k.replace("%", "")] = int(v.item())
+
+    py_expr = expr_str.replace("%", "_var_")
+    try:
+        tree = ast.parse(py_expr, mode="eval")
+
+        def eval_node(node: ast.AST) -> int:
+            if isinstance(node, ast.Expression):
+                return eval_node(node.body)
+            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                return int(node.value)
+            if isinstance(node, ast.Name):
+                return env.get(node.id, 0)
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+                return -eval_node(node.operand)
+            if isinstance(node, ast.BinOp):
+                left = eval_node(node.left)
+                right = eval_node(node.right)
+                if isinstance(node.op, ast.Add):
+                    return left + right
+                if isinstance(node.op, ast.Sub):
+                    return left - right
+                if isinstance(node.op, ast.Mult):
+                    return left * right
+                if isinstance(node.op, (ast.FloorDiv, ast.Div)):
+                    return int(left / right) if right != 0 else 0
+            return 0
+
+        return eval_node(tree)
+    except Exception:
+        return 0
 
 
 @dataclass
@@ -257,7 +405,7 @@ class MachineState:
         self.values[name] = value
 
 
-    def _materialize_descriptor(self, memref: "MemRef", base: int) -> np.ndarray:
+    def _materialize_descriptor(self, memref: MemRef, base: int) -> np.ndarray:
         from tritonflow.emu.exec import _descriptor_fields
         fields = _descriptor_fields(memref.access_key)
         raw_sizes = fields.get("sizes", "[]").strip("[]").strip()
@@ -267,7 +415,8 @@ class MachineState:
         strides = []
         for s in (raw_strides.split(",") if raw_strides else []):
             s = s.strip()
-            if not s: continue
+            if not s:
+                continue
             try:
                 strides.append(int(s))
             except ValueError:
@@ -281,10 +430,7 @@ class MachineState:
         offsets = []
         for o in (raw_offsets.split(",") if raw_offsets else []):
             o = o.strip()
-            try:
-                offsets.append(int(o))
-            except ValueError:
-                offsets.append(0)
+            offsets.append(_eval_descriptor_expr(o, self))
 
         is_loop_carried = fields.get("loop_carried", "False") == "True"
         raw_inc = fields.get("increment", "0")
@@ -294,8 +440,26 @@ class MachineState:
         except ValueError:
             if raw_inc in self.values:
                 inc = int(np.asarray(self.values[raw_inc]).item())
-                
-        loop_offset = self.loop_iteration * inc if is_loop_carried else 0
+
+        stride_inc = 1
+        if is_loop_carried and strides:
+            if len(strides) == 1:
+                stride_inc = strides[0]
+            elif len(strides) == 2:
+                raw_stride_parts = [s.strip() for s in (raw_strides.split(",") if raw_strides else []) if s.strip()]
+                k_dims = [i for i, s in enumerate(raw_stride_parts) if "k" in s.lower()]
+                if len(k_dims) == 1:
+                    stride_inc = strides[k_dims[0]]
+                elif len(sizes) == 2 and sizes[0] == inc and sizes[1] != inc:
+                    stride_inc = strides[0]
+                elif len(sizes) == 2 and sizes[1] == inc and sizes[0] != inc:
+                    stride_inc = strides[1]
+                elif memref.base.lower().startswith(("%b", "b")) or "b_ptr" in memref.access_key:
+                    stride_inc = strides[0]
+                else:
+                    stride_inc = strides[1]
+
+        loop_offset = self.loop_iteration * inc * stride_inc if is_loop_carried else 0
 
         if not sizes:
             return np.array([base], dtype=np.int64)
@@ -308,11 +472,23 @@ class MachineState:
             addresses += coords[dim] * stride + off
         return addresses
 
-    def _resolve_memref(self, memref: "MemRef") -> np.ndarray:
+    def _resolve_memref(self, memref: MemRef) -> np.ndarray:
         value = self.resolve(SsaRef(memref.base))
         arr = np.asarray(value, dtype=np.int64)
         if arr.ndim > 0:
             return arr
+        if memref.access_key and "is_gather=True" in memref.access_key:
+            fields = _descriptor_fields(memref.access_key)
+            indices_name = fields.get("indices")
+            if indices_name and indices_name in self.values:
+                indices_val = np.asarray(self.values[indices_name], dtype=np.int64)
+                base_addr = int(arr.item() if arr.size == 1 else arr)
+                return base_addr + indices_val
+        if not memref.access_key:
+            storage = self.address_of(memref.base)
+            if storage is not None:
+                return storage.base + np.arange(storage.length, dtype=np.int64)
+            return int(arr) + np.arange(getattr(memref, "length", 1), dtype=np.int64)
         return self._materialize_descriptor(memref, int(arr))
 
     def address_of(self, name: str) -> Storage | None:
@@ -406,8 +582,12 @@ def _sizes(key: str | None) -> tuple[int, ...]:
 
 def _declared_shape(instr: Instr) -> tuple[int, ...]:
     for operand in instr.operands.values():
-        if isinstance(operand, MemRef):
-            return _sizes(operand.access_key)
+        if isinstance(operand, MemRef) and operand.access_key:
+            sizes = _sizes(operand.access_key)
+            if sizes:
+                return sizes
+    if instr.constrained_on:
+        return _sizes(instr.constrained_on)
     return ()
 
 
@@ -439,7 +619,7 @@ def _mask_of(instr: Instr, state: MachineState) -> np.ndarray | None:
 
 
 def apply(instr: Instr, state: MachineState, policy: PrecisionPolicy) -> None:
-    """Execute one instruction against `state` (contracts/emulator.md interface).
+    """Execute one instruction against `state`.
 
     Dispatch is schema-derived when a program carries ``isa_name``: the
     instruction's ``rule`` field (memory | mac | elementwise) from the ISA
@@ -495,6 +675,7 @@ def _apply_memory(instr: Instr, state: MachineState) -> None:
     mask = _mask_of(instr, state)
     dst = instr.operand("dst")
     if isinstance(dst, MemRef):
+        _check_space(instr, state, dst, "dst")
         indices = state.resolve(dst)
         value_operand = instr.operand("value")
         if value_operand is None:
@@ -508,6 +689,7 @@ def _apply_memory(instr: Instr, state: MachineState) -> None:
             f"{instr.name} has neither a dst nor a src memory operand; cannot tell a load "
             "from a store and will not guess"
         )
+    _check_space(instr, state, src, "src")
     if not instr.defs:
         raise UnsupportedInstruction(f"{instr.name} load defines no value to bind")
     loaded = state.gather(state.resolve(src), _align_mask(mask, state.resolve(src)))
@@ -554,77 +736,27 @@ def _require(instr: Instr, role: str) -> Operand:
 
 
 def _apply_elementwise(instr: Instr, state: MachineState) -> None:
-    isa_name = getattr(state, "_isa_name", None)
-    sem_op = None
-    name_map = {
-        "VADD": "add", "ADD": "add",
-        "VMUL": "mul", "MUL": "mul",
-        "VDIV": "div", "DIV": "div",
-        "VSUB": "sub", "SUB": "sub",
-        "VMOD": "mod", "MOD": "mod",
-        "VRELU": "relu", "RELU": "relu",
-        "VCLAMP": "clamp", "CLAMP": "clamp",
-    }
-    if instr.name in name_map:
-        sem_op = name_map[instr.name]
-    elif isa_name:
-        sem_op = _infer_semantics(instr.name, isa_name)
-
-    if sem_op is not None:
-        ops = _operands(instr, state)
-        if not ops:
-            ops = [state.resolve(v) for k, v in instr.operands.items() if not isinstance(v, MemRef)]
-        if not ops:
-            return
-        if sem_op == "relu":
-            res = np.maximum(0, np.asarray(ops[0]))
-        elif sem_op == "clamp":
-            res = np.clip(np.asarray(ops[0]), 0, 1)
-        elif len(ops) == 1:
-            res = np.asarray(ops[0])
-        elif sem_op == "add":
-            res = np.asarray(ops[0]) + np.asarray(ops[1])
-        elif sem_op == "mul":
-            res = np.asarray(ops[0]) * np.asarray(ops[1])
-        elif sem_op == "div":
-            res = np.asarray(ops[0]) / np.asarray(ops[1])
-        elif sem_op == "sub":
-            res = np.asarray(ops[0]) - np.asarray(ops[1])
-        elif sem_op == "mod":
-            res = np.mod(np.asarray(ops[0]), np.asarray(ops[1]))
-        else:
-            res = np.asarray(ops[0])
-        if instr.defs:
-            state.bind(instr.defs[0], res)
-        return
-
-    op = instr.source.op_name if instr.source else None
-    if op is not None and op in _ELEMENTWISE:
-        shape = _declared_shape(instr)
-        handler = _ELEMENTWISE[op]
+    """Execute the operation the instruction was selected for: exactly its recorded source op."""
+    if instr.name in ("LI", "MOVI"):
         if not instr.defs:
-            raise UnsupportedInstruction(f"{op} defines no value to bind")
-        value = handler(instr, state, shape)
-        state.bind(instr.defs[0], value)
+            raise UnsupportedInstruction(f"{instr.name} defines no value to bind")
+        state.bind(instr.defs[0], _const(instr, state, _declared_shape(instr)))
         return
-
+    op = instr.source.op_name if instr.source else None
     if op is None:
         raise UnsupportedInstruction(
-            f"{instr.name} at {instr.source} carries no source operation; the elementwise "
+            f"{instr.name} carries no source operation; the elementwise "
             "unit cannot know which arithmetic to perform"
         )
-    shape = _declared_shape(instr)
     handler = _ELEMENTWISE.get(op)
     if handler is None:
         raise UnsupportedInstruction(
             f"elementwise operation {op!r} is not implemented by this machine "
             f"(known: {sorted(_ELEMENTWISE)}); refusing rather than substituting"
         )
-
     if not instr.defs:
         raise UnsupportedInstruction(f"{op} defines no value to bind")
-    value = handler(instr, state, shape)
-    state.bind(instr.defs[0], value)
+    state.bind(instr.defs[0], handler(instr, state, _declared_shape(instr)))
 
 
 def _operands(instr: Instr, state: MachineState) -> list[Any]:
@@ -632,7 +764,10 @@ def _operands(instr: Instr, state: MachineState) -> list[Any]:
 
 
 def _const(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> Any:
-    value = state.resolve(_require(instr, "value"))
+    val_op = instr.operands.get("value")
+    if val_op is None:
+        val_op = _require(instr, "value")
+    value = state.resolve(val_op)
     if not shape:
         return value
     return np.full(shape, value, dtype=np.float32 if isinstance(value, float) else np.int64)
@@ -704,6 +839,50 @@ def _remsi(left, right) -> Any:
     return np.remainder(np.asarray(left).astype(np.int64), np.asarray(right).astype(np.int64))
 
 
+def _subi(left, right) -> Any:
+    return (np.asarray(left, dtype=np.int64) - np.asarray(right, dtype=np.int64)).astype(np.int64)
+
+
+def _divui(left, right) -> Any:
+    return np.floor_divide(np.asarray(left, dtype=np.uint64), np.asarray(right, dtype=np.uint64)).astype(np.int64)
+
+
+def _remui(left, right) -> Any:
+    return np.remainder(np.asarray(left, dtype=np.uint64), np.asarray(right, dtype=np.uint64)).astype(np.int64)
+
+
+def _maxsi(left, right) -> Any:
+    return np.maximum(np.asarray(left, dtype=np.int64), np.asarray(right, dtype=np.int64)).astype(np.int64)
+
+
+def _minsi(left, right) -> Any:
+    return np.minimum(np.asarray(left, dtype=np.int64), np.asarray(right, dtype=np.int64)).astype(np.int64)
+
+
+def _maxui(left, right) -> Any:
+    return np.maximum(np.asarray(left, dtype=np.uint64), np.asarray(right, dtype=np.uint64)).astype(np.int64)
+
+
+def _minui(left, right) -> Any:
+    return np.minimum(np.asarray(left, dtype=np.uint64), np.asarray(right, dtype=np.uint64)).astype(np.int64)
+
+
+def _clamp(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.ndarray:
+    operands = _operands(instr, state)
+    if not operands:
+        raise UnsupportedInstruction("clamp requires operands")
+    x = np.asarray(operands[0], dtype=np.float32)
+    if len(operands) >= 3:
+        lo = np.asarray(operands[1], dtype=np.float32)
+        hi = np.asarray(operands[2], dtype=np.float32)
+    elif "lo" in instr.operands and "hi" in instr.operands:
+        lo = np.asarray(state.resolve(instr.operands["lo"]), dtype=np.float32)
+        hi = np.asarray(state.resolve(instr.operands["hi"]), dtype=np.float32)
+    else:
+        raise UnsupportedInstruction(f"clamp requires lo and hi operands; operands={instr.operands}")
+    return np.clip(x, lo, hi)
+
+
 def _maxnumf(left, right) -> Any:
     return np.maximum(
         np.asarray(left, dtype=np.float32), np.asarray(right, dtype=np.float32)
@@ -727,9 +906,6 @@ def _negf(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.ndarr
     return -np.asarray(operands[0], dtype=np.float32)
 
 
-def _cmpf(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.ndarray:
-    left, right = _operands(instr, state)
-    return np.greater(np.asarray(left, dtype=np.float32), np.asarray(right, dtype=np.float32))
 
 
 def _select(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.ndarray:
@@ -738,15 +914,27 @@ def _select(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.nda
     return np.where(np.asarray(cond, dtype=bool), np.asarray(on_true), np.asarray(on_false))
 
 
-def _cmpi(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.ndarray:
-    """`arith.cmpi`, executed as the signed less-than the corpus uses (F8).
 
-    The predicate is not part of the emitted instruction, so this is the one
-    place the machine supplies a fact the artifact does not carry. It is written
-    down here, in the module docstring's third bullet, and in the audit report.
-    """
-    left, right = _operands(instr, state)
-    return np.less(np.asarray(left), np.asarray(right))
+
+
+def _compare(op_name: str):
+    """A compare reads its predicate from the instruction's `predicate` operand; it has no default."""
+    from ..isa.predicates import PredicateError, evaluate
+
+    def handler(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.ndarray:
+        predicate = instr.operand("predicate")
+        if predicate is None:
+            raise UnsupportedInstruction(
+                f"{op_name} carries no predicate operand; refusing rather than defaulting to slt"
+            )
+        left, right = _operands(instr, state)
+        try:
+            return evaluate(op_name, int(state.resolve(predicate)), left, right)
+        except PredicateError as error:
+            raise UnsupportedInstruction(f"{op_name}: {error}") from error
+
+    return handler
+
 
 
 def _addptr(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.ndarray:
@@ -754,63 +942,145 @@ def _addptr(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.nda
     return np.asarray(base).astype(np.int64) + np.asarray(offset).astype(np.int64)
 
 
-_ELEMENTWISE: dict[str, Any] = {
-    "arith.constant": _const,
-    "tt.get_program_id": _program_id,
-    "tt.make_range": _make_range,
-    "tt.splat": _splat,
-    "tt.broadcast": _broadcast,
-    "tt.expand_dims": _expand_dims,
-    "arith.addi": _binary(_addi),
-    "arith.addf": _binary(_addf),
-    "arith.muli": _binary(_muli),
-    "arith.divsi": _binary(_divsi),
-    "arith.divf": _binary(_divf),
-    "arith.remsi": _binary(_remsi),
-    "arith.maxnumf": _binary(_maxnumf),
-    "arith.mulf": _binary(_mulf),
-    "arith.subf": _binary(_subf),
-    "arith.negf": _negf,
-    "arith.cmpi": _cmpi,
-    "tt.addptr": _addptr,
-}
-
-#: Schema-driven semantics map. When an instruction's name is not in the legacy
-#: named-instruction table (VADD, VMUL, etc.), but the ISA schema declares a
-#: ``semantics`` string, we parse the semantic operation from it. This closes
-#: the audit finding that "semantics: field is never executed."
-_SEMANTICS_OPS: dict[str, str] = {
-    "+": "add",
-    "*": "mul",
-    "/": "div",
-    "-": "sub",
-    "%": "mod",
-    "max(0": "relu",
-    "min(max": "clamp",
-}
+def _minnumf(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    return np.minimum(a, b)
 
 
-def _infer_semantics(instr_name: str, isa_name: str | None) -> str | None:
-    """Infer the semantic operation for a named elementwise instruction from schema.
+def _extf(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.ndarray:
+    operands = _operands(instr, state)
+    return np.asarray(operands[0], dtype=np.float32)
 
-    Returns the op kind ('add', 'mul', 'sub', 'mod', 'relu', 'clamp') or None.
+
+def _truncf(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.ndarray:
+    operands = _operands(instr, state)
+    return np.asarray(operands[0], dtype=np.float16)
+
+
+def _sitofp(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.ndarray:
+    operands = _operands(instr, state)
+    return np.asarray(operands[0], dtype=np.float32)
+
+
+def _fptosi(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.ndarray:
+    operands = _operands(instr, state)
+    return np.asarray(operands[0], dtype=np.int32)
+
+
+def _extsi(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.ndarray:
+    operands = _operands(instr, state)
+    return np.asarray(operands[0], dtype=np.int64)
+
+
+def _trunci(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.ndarray:
+    operands = _operands(instr, state)
+    return np.asarray(operands[0], dtype=np.int32)
+
+
+def _reduce(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.ndarray:
+    """`tt.reduce` is refused: its combine operator never reaches this point.
+
+    Triton carries the reduction's combine function (sum, max, min, ...) as a region on
+    the operation. The parser builds that region generically and the emitted `Instr` does
+    not record which operator it holds, so executing it would mean guessing -- and a
+    guessed `sum` would silently return the wrong answer for a `max` reduction. Refusing
+    is the only honest option until the combine operator is carried through.
     """
-    if isa_name is None:
-        return None
-    try:
-        from ..isa.schema import load_builtin
-        schema = load_builtin(isa_name)
-        instr_def = schema.instructions.get(instr_name)
-        if instr_def is None or not instr_def.semantics:
-            return None
-        sem = instr_def.semantics
-        for pattern, op_kind in _SEMANTICS_OPS.items():
-            if pattern in sem:
-                return op_kind
-        return None
-    except Exception:
-        return None
+    raise UnsupportedInstruction(
+        "tt.reduce carries its combine operator in a region that the pipeline does not "
+        "record; refusing rather than assuming sum"
+    )
 
+
+def _absf(instr: Instr, state: MachineState, shape: tuple[int, ...]) -> np.ndarray:
+    operands = _operands(instr, state)
+    return np.abs(np.asarray(operands[0], dtype=np.float32))
+
+
+_ELEMENTWISE: dict[str, Any] = {
+    # Cast & Reduce
+    "arith.extf": _extf,
+    "extf": _extf,
+    "arith.truncf": _truncf,
+    "truncf": _truncf,
+    "arith.sitofp": _sitofp,
+    "sitofp": _sitofp,
+    "arith.fptosi": _fptosi,
+    "fptosi": _fptosi,
+    "arith.extsi": _extsi,
+    "extsi": _extsi,
+    "arith.trunci": _trunci,
+    "trunci": _trunci,
+    "tt.reduce": _reduce,
+    "reduce": _reduce,
+    "arith.constant": _const,
+    "constant": _const,
+    "tt.get_program_id": _program_id,
+    "get_program_id": _program_id,
+    "tt.make_range": _make_range,
+    "make_range": _make_range,
+    "tt.splat": _splat,
+    "splat": _splat,
+    "tt.broadcast": _broadcast,
+    "broadcast": _broadcast,
+    "tt.expand_dims": _expand_dims,
+    "expand_dims": _expand_dims,
+    # Add
+    "arith.addi": _binary(_addi),
+    "addi": _binary(_addi),
+    "arith.addf": _binary(_addf),
+    "addf": _binary(_addf),
+    # Sub
+    "arith.subi": _binary(_subi),
+    "subi": _binary(_subi),
+    "arith.subf": _binary(_subf),
+    "subf": _binary(_subf),
+    # Mul
+    "arith.muli": _binary(_muli),
+    "muli": _binary(_muli),
+    "arith.mulf": _binary(_mulf),
+    "mulf": _binary(_mulf),
+    # Div
+    "arith.divsi": _binary(_divsi),
+    "divsi": _binary(_divsi),
+    "arith.divui": _binary(_divui),
+    "divui": _binary(_divui),
+    "arith.divf": _binary(_divf),
+    "divf": _binary(_divf),
+    # Rem
+    "arith.remsi": _binary(_remsi),
+    "remsi": _binary(_remsi),
+    "arith.remui": _binary(_remui),
+    "remui": _binary(_remui),
+    # Max / Min
+    "arith.maxnumf": _binary(_maxnumf),
+    "maxnumf": _binary(_maxnumf),
+    "arith.minnumf": _binary(_minnumf),
+    "minnumf": _binary(_minnumf),
+    "arith.maxsi": _binary(_maxsi),
+    "maxsi": _binary(_maxsi),
+    "arith.minsi": _binary(_minsi),
+    "minsi": _binary(_minsi),
+    "arith.maxui": _binary(_maxui),
+    "maxui": _binary(_maxui),
+    "arith.minui": _binary(_minui),
+    "minui": _binary(_minui),
+    # Neg / Abs
+    "arith.negf": _negf,
+    "negf": _negf,
+    "math.absf": _absf,
+    "arith.absf": _absf,
+    "absf": _absf,
+    # Clamp
+    "tt.clamp": _clamp,
+    "clamp": _clamp,
+    # Comparison & Ptr
+    "arith.cmpi": _compare("arith.cmpi"),
+    "cmpi": _compare("arith.cmpi"),
+    "arith.cmpf": _compare("arith.cmpf"),
+    "cmpf": _compare("arith.cmpf"),
+    "tt.addptr": _addptr,
+    "addptr": _addptr,
+}
 
 # --------------------------------------------------------------------------- #
 # Loops and programs
@@ -881,14 +1151,21 @@ def emulate(
     loop_iteration: int = 0,
     use_cpp: bool = False,
 ) -> dict[str, np.ndarray]:
-    if use_cpp:
-        from tritonflow.emu._emu_cpp import emulate as _cpp_emulate
-        return _cpp_emulate(program, inputs, policy=policy, grid=grid)
     """Execute `program` and return every buffer it wrote (postcondition 1).
 
     `UNSUPPORTED` halts locally with :class:`ProgramNotExecutable`; the caller
     routes that kernel to the eager fallback (postcondition 2).
     """
+    if use_cpp:
+        from tritonflow.emu._emu_cpp import emulate as _cpp_emulate
+        return _cpp_emulate(
+            program,
+            inputs,
+            policy=policy,
+            grid=grid,
+            transfers={n: [f"{s}>{d}" for s, d in tr] for n, tr in transfer_table(program.isa_name).items()},
+        )
+
     markers = program.markers()
     if markers:
         raise ProgramNotExecutable(markers[0])
@@ -906,6 +1183,7 @@ def emulate(
 
 __all__ = [
     "ELEMENTWISE_INSTRUCTION",
+    "AddressSpaceViolation",
     "MAC_INSTRUCTIONS",
     "MEMORY_INSTRUCTIONS",
     "PROGRAM_ID_AXES",

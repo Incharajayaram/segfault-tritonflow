@@ -1,6 +1,6 @@
-"""Precision policy and derived tolerance — `contracts/emulator.md` FR-022.
+"""Precision policy and derived tolerance.
 
-The contract makes one demand that rules out the usual shortcut: **a declared
+This module makes one demand that rules out the usual shortcut: **a declared
 precision must be implemented, not tolerated.** If the kernel's `tt.dot`
 declares `inputPrecision = tf32`, the emulator truncates the multiply inputs to
 tf32's mantissa width *before* multiplying, and the difference against an fp32
@@ -39,8 +39,7 @@ from typing import Literal
 
 import numpy as np
 
-#: Explicit mantissa bits, as `contracts/emulator.md` states them: "tf32 mantissa
-#: truncation: 10 explicit bits vs 23".
+#: Explicit mantissa bits: tf32 mantissa truncation is 10 explicit bits vs 23.
 TF32_EXPLICIT_MANTISSA_BITS = 10
 FP32_EXPLICIT_MANTISSA_BITS = 23
 
@@ -49,7 +48,7 @@ FP32_EXPLICIT_MANTISSA_BITS = 23
 _TF32_HALF_ULP = 2.0 ** -(TF32_EXPLICIT_MANTISSA_BITS + 1)
 _FP32_HALF_ULP = 2.0 ** -(FP32_EXPLICIT_MANTISSA_BITS + 1)
 
-#: `contracts/emulator.md` precondition: the two values `input_precision` may take.
+#: The two values `input_precision` may take.
 InputPrecision = Literal["tf32", "ieee"]
 
 #: Orders the ISA schema may declare (`isa/schemas/tritonflow1.yaml` declares
@@ -271,7 +270,7 @@ class PrecisionPolicy:
         reference: np.ndarray,
         dtype: str = "f32",
     ) -> Comparison:
-        """The differential check `contracts/emulator.md` requires."""
+        """The differential check the precision policy requires."""
         a = np.asarray(actual, dtype=np.float64)
         r = np.asarray(reference, dtype=np.float64)
         if a.shape != r.shape:

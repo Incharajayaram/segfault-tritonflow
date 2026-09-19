@@ -13,6 +13,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -161,6 +162,12 @@ struct Program {
 
     /// Total cost (fsum of instruction costs).
     double total_cost = 0.0;
+
+    /// Per-instruction legal (source space, destination space) moves, supplied by
+    /// the caller from the ISA schema. The C++ emulator has no schema loader, so an
+    /// instruction absent from this table cannot have a memory access verified and
+    /// is refused rather than let through.
+    std::map<std::string, std::vector<std::pair<std::string, std::string>>> transfers;
 
     /// Collect all UNSUPPORTED markers in the program.
     std::vector<const UnsupportedMarker*> markers() const {

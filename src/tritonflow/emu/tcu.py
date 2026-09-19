@@ -49,15 +49,15 @@ class TcuEmulator:
     # FEDP backend latencies from VX_config.toml lines 268-278
     FEDP_LATENCIES = {
         "DPI": 4,
-        "DSP": 12,
-        "BHF": 8,
-        "TFR": 6,
+        "DSP": 42,
+        "BHF": 13,
+        "TFR": 4,
         "FPNEW": 14,
     }
 
     def __init__(
         self,
-        num_blocks: int = 4,
+        num_blocks: int = 1,
         fedp_type: str = "TFR",
         sparse_enabled: bool = True,
         mx_enabled: bool = True,

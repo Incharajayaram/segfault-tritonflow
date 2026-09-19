@@ -76,12 +76,12 @@ def test_elementwise_addi():
     """Test a basic elementwise operation in the C++ emulator."""
     # Minimal program: arith.addi on two scalar inputs, then store
     prog = Program(
-        isa_name="tritonflow",
+        isa_name="tritonflow1",
         schema_version=1,
         inputs=("A", "B", "Out"),
         instrs=(
             Instr(
-                name="EPI",
+                name="EPI_ADD",
                 operands={"in1": SsaRef("A"), "in2": SsaRef("B")},
                 defs=("C",),
                 source_ops=(SourceRef(op_name="arith.addi"),),
@@ -113,7 +113,7 @@ def test_elementwise_addi():
 def test_loop():
     """Test loop execution in the C++ emulator."""
     prog = Program(
-        isa_name="tritonflow",
+        isa_name="tritonflow1",
         schema_version=1,
         inputs=("lower", "upper", "step", "init", "Out"),
         loops=(
@@ -129,7 +129,7 @@ def test_loop():
                 results=("final_acc",),
                 body=(
                     Instr(
-                        name="EPI",
+                        name="EPI_ADD",
                         operands={"in1": SsaRef("acc"), "in2": Imm(1)},
                         defs=("acc_next",),
                         loop=0,
@@ -163,18 +163,18 @@ def test_loop():
 def test_program_id():
     """Test get_program_id with grid parameters in the C++ emulator."""
     prog = Program(
-        isa_name="tritonflow",
+        isa_name="tritonflow1",
         schema_version=1,
         inputs=("OutX", "OutY"),
         instrs=(
             Instr(
-                name="EPI",
+                name="EPI_ADD",
                 operands={"value": Imm(0)},
                 defs=("PIDX",),
                 source_ops=(SourceRef(op_name="tt.get_program_id", line=1),),
             ),
             Instr(
-                name="EPI",
+                name="EPI_ADD",
                 operands={"value": Imm(1)},
                 defs=("PIDY",),
                 source_ops=(SourceRef(op_name="tt.get_program_id", line=2),),
@@ -212,12 +212,12 @@ def test_program_id():
 def test_exceptions():
     """Test that unsupported ops raise UnsupportedInstruction, and markers raise ProgramNotExecutable."""
     prog_invalid_op = Program(
-        isa_name="tritonflow",
+        isa_name="tritonflow1",
         schema_version=1,
         inputs=("Out",),
         instrs=(
             Instr(
-                name="EPI",
+                name="EPI_ADD",
                 operands={"value": Imm(0)},
                 defs=("Invalid",),
                 source_ops=(SourceRef(op_name="tt.invalid_op_does_not_exist"),),
@@ -231,7 +231,7 @@ def test_exceptions():
         emulate(prog_invalid_op, inputs, use_cpp=True)
 
     prog_with_marker = Program(
-        isa_name="tritonflow",
+        isa_name="tritonflow1",
         schema_version=1,
         inputs=("Out",),
         instrs=(),

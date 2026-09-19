@@ -344,9 +344,22 @@ PYBIND11_MODULE(_emu_cpp, m) {
     m.def("emulate", [](py::object program,
                         py::dict inputs,
                         py::object policy_obj,
-                        py::tuple grid) {
+                        py::tuple grid,
+                        py::dict transfers) {
         // Convert program.
         Program prog = convert_program(program);
+        for (auto& [key, val] : transfers) {
+            std::vector<std::pair<std::string, std::string>> moves;
+            for (auto& item : py::cast<py::list>(val)) {
+                std::string spec = py::cast<std::string>(item);
+                auto cut = spec.find('>');
+                if (cut == std::string::npos) {
+                    throw std::runtime_error("transfer '" + spec + "' must look like 'src>dst'");
+                }
+                moves.emplace_back(spec.substr(0, cut), spec.substr(cut + 1));
+            }
+            prog.transfers[py::cast<std::string>(key)] = std::move(moves);
+        }
 
         // Convert inputs.
         auto cpp_inputs = convert_inputs(inputs);
@@ -373,6 +386,7 @@ PYBIND11_MODULE(_emu_cpp, m) {
     }, py::arg("program"), py::arg("inputs"),
        py::arg("policy") = py::none(),
        py::arg("grid") = py::make_tuple(0, 0, 0),
+       py::arg("transfers") = py::dict(),
        "Execute a program and return every buffer it wrote (postcondition 1).");
 
     // ---- HAS_CPP flag ----

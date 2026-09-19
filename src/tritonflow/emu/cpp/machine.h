@@ -94,6 +94,7 @@ public:
     std::unordered_map<std::string, Value> values;
     std::set<std::string> written;
     int grid[3] = {0, 0, 0};
+    int loop_iteration = 0;
 
     // -- Construction ------------------------------------------------------ //
 
