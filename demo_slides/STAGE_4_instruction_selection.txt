@@ -1,0 +1,82 @@
+====================================================================
+  STAGE 4 — Instruction Selection
+  Source: src/tritonflow/isa/select.py
+          src/tritonflow/isa/cost.py
+          src/tritonflow/isa/schemas/*.yaml
+====================================================================
+
+For each operation in the (elided) program, TritonFlow iterates
+through EVERY instruction in the chip's YAML schema, tests its
+constraint predicate, evaluates its cost formula, and picks the
+cheapest valid one.
+
+RULE: If no instruction is valid → emit UNSUPPORTED marker + refuse.
+      Never guess. Never silently produce a wrong answer.
+
+
+====================================================================
+  SELECTION AUDIT for tt.dot on tile (M=64, N=64, K=32)
+====================================================================
+
+  mac_ops = M × N × K = 64 × 64 × 32 = 131,072
+
+  ── ISA: tritonflow1 (Systolic Array) ──────────────────────────────
+
+    Candidate       Constraint Check              Cost Formula                 Cost     Decision
+    ─────────────── ─────────────────────────     ──────────────────────────── ──────── ──────────
+    MAC8            m%8==0 ✓, n%8==0 ✓            0.70 * 131072 / (8*8)       = 1,003.5  REJECTED (higher cost)
+    MAC16           m%16==0 ✓, n%16==0 ✓          0.70 * 131072 / (16*16)     = 358.4  ✅ SELECTED
+
+  ── ISA: tritonflow2 (Banked Scratchpad + Outer Product Unit) ──────
+
+    Candidate       Constraint Check              Cost Formula                 Cost     Decision
+    ─────────────── ─────────────────────────     ──────────────────────────── ──────── ──────────
+    OPU8            m%8==0 ✓, n%8==0 ✓            1.10 * 131072 / (8*8)       = 2,252.8 REJECTED
+    OPU32           m%32==0 ✓, n%32==0 ✓          0.55 * 131072 / (32*32)     = 70.4   ✅ SELECTED
+
+  ── ISA: vortex_rvgpu (RISC-V GPU with Tensor Core Unit) ──────────
+
+    Candidate           Constraint Check                    Cost Formula                   Cost     Decision
+    ─────────────────── ───────────────────────────────     ────────────────────────────── ──────── ──────────
+    TCU_WMMA16          m%16==0 ✓, n%16==0 ✓               0.40 * 131072 / (16*16)        = 204.8  REJECTED
+    TCU_WGMMA32         m%32==0 ✓, n%32==0 ✓               0.25 * 131072 / (32*32)        = 32.0   ✅ SELECTED
+    TCU_WGMMA_SP32      sparse_precondition ✗ (dense input) —                               —      REJECTED (constraint failed)
+    TCU_WGMMA_MXFP8     requires mxfp8 dtype ✗              —                               —      REJECTED (constraint failed)
+    TCU_MMA32           m%32==0 ✓, n%32==0 ✓               0.25 * 131072 / (32*32)        = 32.0   REJECTED (tie broken by declaration order)
+
+  Note on sparse: TCU_WGMMA_SP32 would have cost 0.15 × 131072/(32×32) = 19.2
+  — it is cheaper on paper — but it is REJECTED with an explicit reason:
+  "sparse data precondition not met: input tensor is dense"
+  TritonFlow never uses an instruction it cannot satisfy.
+
+
+====================================================================
+  SELECTION AUDIT for tt.load (A tile, 64x32, stride=[sam,sak])
+====================================================================
+
+  bytes       = 64 × 32 × 4 = 8,192 bytes
+  transactions = computed from cache-line coalescing model
+                 (stride sak=1 → contiguous → 1 transaction per line)
+
+  ── ISA: tritonflow1 ──
+
+    DMA1D   constraint: contiguous==1 ✓   cost: 1.00 × words = 2,048.0   ✅ SELECTED
+    DMA2D   constraint: rows>1 ✓          cost: 0.60 × words = 1,228.8   REJECTED (DMA2D requires confirmed 2D stride, not selected for this shape)
+
+  ── ISA: tritonflow2 ──
+
+    LDG     constraint: (none)            cost: 0.80 × line_words × transactions = 1,638.4  ✅ SELECTED
+
+  ── ISA: vortex_rvgpu ──
+
+    LDG     constraint: (none)            cost: 0.50 × line_words × transactions = 1,024.0  ✅ SELECTED
+
+
+====================================================================
+  SELECTION AUDIT for arith.maxnumf  (ReLU = max(x, 0))
+====================================================================
+
+  tritonflow1:   EPI_MAX   ops: ['maxnumf','maxsi','maxui'] ✓   cost: 2,048.0  ✅
+  tritonflow2:   VPU_MAX   ops: ['maxnumf','maxsi','maxui'] ✓   cost: 1,638.4  ✅
+  vortex_rvgpu:  VMAX      ops: ['maxnumf','maxsi','maxui'] ✓   cost: 204.8    ✅
+

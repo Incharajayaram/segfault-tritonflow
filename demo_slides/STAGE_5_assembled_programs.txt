@@ -1,0 +1,118 @@
+====================================================================
+  STAGE 5 — Assembled Programs
+  Source: src/tritonflow/emit/assemble.py
+====================================================================
+
+After instruction selection, TritonFlow assembles the final Program:
+a structured list of instructions in three sections:
+  - PREAMBLE: one-time setup before the loop (constants, tile counts)
+  - LOOP BODY: repeated once per K-tile iteration
+  - EPILOGUE: post-loop operations (bias, relu, store)
+
+The SAME kernel. THREE different chips. Only the YAML schema changes.
+
+====================================================================
+  tritonflow1  (Systolic Array)
+  fully_lowered = True | total_cost = 13,537.4 | UNSUPPORTED = []
+====================================================================
+
+  [PREAMBLE]   MOVI             cost=0.1       from: arith.constant (0)
+  [PREAMBLE]   MOVI             cost=0.1       from: arith.constant (1)
+  [PREAMBLE]   MOVI             cost=0.1       from: arith.constant (31)
+  [PREAMBLE]   MOVI             cost=409.6     from: arith.constant (zero_tile 64x64)
+  [PREAMBLE]   MOVI             cost=0.1       from: arith.constant (32)
+  [PREAMBLE]   EPI_ADD          cost=0.5       from: arith.addi  (K+31)
+  [PREAMBLE]   EPI_DIV          cost=0.5       from: arith.divsi (ceil K/32)
+
+  [LOOP]  bounds = 0 .. n_tiles  step 1
+    [LOOP BODY]  DMA1D          cost=2,048.0   from: tt.load  (load A tile 64x32)
+    [LOOP BODY]  DMA1D          cost=2,048.0   from: tt.load  (load B tile 32x64)
+    [LOOP BODY]  MAC16          cost=358.4     from: tt.dot   (64x32)*(32x64) systolic
+
+  [EPILOGUE]   DMA1D            cost=64.0      from: tt.load     (load bias [64])
+  [EPILOGUE]   EPI_EXPAND_DIMS  cost=6.4       from: tt.expand_dims  (bias [64]->[1x64])
+  [EPILOGUE]   EPI_BROADCAST    cost=409.6     from: tt.broadcast   (bias [1x64]->[64x64])
+  [EPILOGUE]   EPI_ADD          cost=2,048.0   from: arith.addf  (matmul + bias)
+  [EPILOGUE]   EPI_MAX          cost=2,048.0   from: arith.maxnumf (relu = max(x,0))
+  [EPILOGUE]   DMA1D            cost=4,096.0   from: tt.store    (write output [64x64])
+
+  PARITY CHECK: max_rel_err=3.47e-04  bound=6.25e-02  ✅ PASS
+
+
+====================================================================
+  tritonflow2  (Banked Scratchpad + Outer Product Unit)
+  fully_lowered = True | total_cost = 10,778.8 | UNSUPPORTED = []
+====================================================================
+
+  [PREAMBLE]   MOVI             cost=0.1       from: arith.constant
+  [PREAMBLE]   MOVI             cost=0.1       from: arith.constant
+  [PREAMBLE]   MOVI             cost=0.1       from: arith.constant
+  [PREAMBLE]   MOVI             cost=409.6     from: arith.constant (zero_tile)
+  [PREAMBLE]   MOVI             cost=0.1       from: arith.constant
+  [PREAMBLE]   VPU_ADD          cost=0.4       from: arith.addi
+  [PREAMBLE]   VPU_DIV          cost=0.4       from: arith.divsi
+
+  [LOOP]  bounds = 0 .. n_tiles  step 1
+    [LOOP BODY]  LDG            cost=1,638.4   from: tt.load  (load A tile via global mem)
+    [LOOP BODY]  LDG            cost=1,638.4   from: tt.load  (load B tile via global mem)
+    [LOOP BODY]  OPU32          cost=70.4      from: tt.dot   (32x32 outer-product MMA)
+
+  [EPILOGUE]   LDG              cost=51.2      from: tt.load     (load bias)
+  [EPILOGUE]   VPU_EXPAND_DIMS  cost=6.4       from: tt.expand_dims
+  [EPILOGUE]   VPU_BROADCAST    cost=409.6     from: tt.broadcast
+  [EPILOGUE]   VPU_ADD          cost=1,638.4   from: arith.addf
+  [EPILOGUE]   VPU_MAX          cost=1,638.4   from: arith.maxnumf  (relu)
+  [EPILOGUE]   LDG              cost=3,276.8   from: tt.store   (write output)
+
+  PARITY CHECK: max_rel_err=3.47e-04  bound=6.25e-02  ✅ PASS
+
+
+====================================================================
+  vortex_rvgpu  (RISC-V GPU with Tensor Core Unit)
+  fully_lowered = True | total_cost = 4,982.8 | UNSUPPORTED = []
+====================================================================
+
+  [PREAMBLE]   LI               cost=0.1       from: arith.constant  (Load Immediate)
+  [PREAMBLE]   LI               cost=0.1       from: arith.constant
+  [PREAMBLE]   LI               cost=0.1       from: arith.constant
+  [PREAMBLE]   LI               cost=204.8     from: arith.constant  (zero_tile)
+  [PREAMBLE]   LI               cost=0.1       from: arith.constant
+  [PREAMBLE]   VADD             cost=0.1       from: arith.addi
+  [PREAMBLE]   VDIV             cost=0.1       from: arith.divsi
+
+  [LOOP]  bounds = 0 .. n_tiles  step 1
+    [LOOP BODY]  LDG            cost=1,024.0   from: tt.load  (load A tile from global mem)
+    [LOOP BODY]  LDG            cost=1,024.0   from: tt.load  (load B tile from global mem)
+    [LOOP BODY]  TCU_WGMMA32    cost=32.0      from: tt.dot   (warp-group 32x32 tensor core)
+
+  [EPILOGUE]   LDG              cost=32.0      from: tt.load     (load bias)
+  [EPILOGUE]   VEXPAND_DIMS     cost=3.2       from: tt.expand_dims
+  [EPILOGUE]   VBROADCAST       cost=204.8     from: tt.broadcast
+  [EPILOGUE]   VADD             cost=204.8     from: arith.addf
+  [EPILOGUE]   VMAX             cost=204.8     from: arith.maxnumf  (relu)
+  [EPILOGUE]   STG              cost=2,048.0   from: tt.store    (store to global mem)
+
+  PARITY CHECK: max_rel_err=3.47e-04  bound=6.25e-02  ✅ PASS
+
+
+====================================================================
+  SUMMARY TABLE
+====================================================================
+
+  Operation    | tritonflow1 | tritonflow2 | vortex_rvgpu | Note
+  ─────────────┼─────────────┼─────────────┼──────────────┼──────────────────────────
+  Load A tile  | DMA1D 2048  | LDG 1638    | LDG 1024     | Global mem load (64x32 tile)
+  Load B tile  | DMA1D 2048  | LDG 1638    | LDG 1024     | Global mem load (32x64 tile)
+  tt.dot MMA   | MAC16 358   | OPU32 70    | TCU_WGMMA32 32 | Matrix multiply-accumulate
+  Load bias    | DMA1D 64    | LDG 51      | LDG 32       | Bias vector [64]
+  Add bias     | EPI_ADD     | VPU_ADD     | VADD         | Elementwise add
+  ReLU (max 0) | EPI_MAX     | VPU_MAX     | VMAX         | max(x, 0) elementwise
+  Store result | DMA1D 4096  | LDG 3277    | STG 2048     | Write [64x64] output
+  ─────────────┼─────────────┼─────────────┼──────────────┼──────────────────────────
+  TOTAL COST   | 13,537      | 10,779      | 4,983        | Abstract units, not cycles!
+  Parity ✅    | 3.47e-04    | 3.47e-04    | 3.47e-04     | vs fp64 NumPy reference
+
+  ⚠️  IMPORTANT: Cost numbers are NOT comparable across chips.
+     Each chip defines its own cost scale in its own YAML schema.
+     They are used ONLY to rank instructions WITHIN a single chip.
+

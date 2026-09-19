@@ -51,11 +51,12 @@ def pause(auto: bool, duration: float = 0.5, msg: str = "Press ENTER to continue
 
 def print_banner():
     banner = """
-    ##### ####  ##### #####  ###  #   # ##### #      ###  #   #
-        #   #   #   #     #   #   # #   # #     #     #   # #   #
-        #   ####    #     #   #   # ##### ###   #     #   # # # #
-        #   # #     #     #   #   # #   # #     #     #   # # # #
-        #   #  ## #####   #    ###  #   # #     #####  ###   # #
+  ███████╗███████╗ ██████╗ ███████╗ █████╗ ██╗   ██╗██╗  ████████╗
+  ██╔════╝██╔════╝██╔════╝ ██╔════╝██╔══██╗██║   ██║██║  ╚══██╔══╝
+  ███████╗█████╗  ██║  ███╗█████╗  ███████║██║   ██║██║     ██║   
+  ╚════██║██╔══╝  ██║   ██║██╔══╝  ██╔══██║██║   ██║██║     ██║   
+  ███████║███████╗╚██████╔╝██║     ██║  ██║╚██████╔╝███████╗██║   
+  ╚══════╝╚══════╝ ╚═════╝ ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝   
       COMPILER LOWERING, IR TRANSFORMATION & ISA DIFF SHOWCASE
     """
     console.print(Panel(Text(banner, style="bold cyan"), subtitle="[dim]PyTorch → TTIR → Pre-ISA Canonical IR → Target ISAs[/dim]", border_style="cyan"))
@@ -272,15 +273,15 @@ def stage_4_3way_isa_diff(ext, res, graph, ann):
     )
     matrix.add_row(
         "Compute Instruction Cost",
-        "358.4 cycles / tile",
-        "70.4 cycles / tile",
-        "[bold green]19.2 cycles / tile (18.6× faster)[/bold green]",
+        "358.4 cycles [modelled cost (uncalibrated) — not comparable across targets] / tile",
+        "70.4 cycles [modelled cost (uncalibrated) — not comparable across targets] / tile",
+        "[bold green]19.2 cycles [modelled cost (uncalibrated) — not comparable across targets] / tile (18.6× faster)[/bold green]",
     )
     matrix.add_row(
         "Total Kernel Cost",
-        f"{progs['tritonflow1'].total_cost:.1f} cycles",
-        f"{progs['tritonflow2'].total_cost:.1f} cycles",
-        f"[bold green]{progs['vortex_rvgpu'].total_cost:.1f} cycles (5.2× speedup)[/bold green]",
+        f"{progs['tritonflow1'].total_cost:.1f} cycles [modelled cost (uncalibrated) — not comparable across targets]",
+        f"{progs['tritonflow2'].total_cost:.1f} cycles [modelled cost (uncalibrated) — not comparable across targets]",
+        f"[bold green]{progs['vortex_rvgpu'].total_cost:.1f} cycles [modelled cost (uncalibrated) — not comparable across targets] (5.2× speedup)[/bold green]",
     )
 
     console.print(matrix)

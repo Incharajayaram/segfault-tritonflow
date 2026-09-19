@@ -1,0 +1,92 @@
+====================================================================
+  STAGE 3 — Memory Descriptor Recognition + Address Elision
+  Source: src/tritonflow/recognize/descriptor.py
+          src/tritonflow/idioms/detect.py
+====================================================================
+
+After parsing the TTIR, TritonFlow walks the def-use graph to
+recognise WHAT each load/store is actually accessing. It computes
+a compact "AccessDescriptor" (memory descriptor) for each pointer.
+
+Once a descriptor is known, all the pointer arithmetic that computes
+addresses BECOMES REDUNDANT — the hardware's DMA / load unit will
+generate the addresses itself from the descriptor. So TritonFlow
+REMOVES that arithmetic from the program. This is called:
+  "Address Elision" or "Descriptor Subsumption"
+
+
+--------------------------------------------------------------------
+  THE BEFORE (raw TTIR, inside the K-loop):
+  Loop carries 3 values: (%a_ptrs, %b_ptrs, %acc)
+--------------------------------------------------------------------
+
+  %a_tile    = tt.load %a_ptrs_38
+  %b_tile    = tt.load %b_ptrs_39
+  %acc_new   = tt.dot  %a_tile, %b_tile, %acc_40
+
+  -- POINTER ADVANCE ARITHMETIC (6 ops per tile, per iteration) --
+  %step_a    = arith.muli %sak, %c32      : i32          [redundant]
+  %step_a_t  = tt.splat %step_a           : tensor<64x32xi32> [redundant]
+  %a_next    = tt.addptr %a_ptrs_38, %step_a_t           [redundant]
+
+  %step_b    = arith.muli %sbk, %c32      : i32          [redundant]
+  %step_b_t  = tt.splat %step_b           : tensor<32x64xi32> [redundant]
+  %b_next    = tt.addptr %b_ptrs_39, %step_b_t           [redundant]
+
+  scf.yield %a_next, %b_next, %acc_new   -- loop carries 3 values
+
+
+--------------------------------------------------------------------
+  WHAT THE DESCRIPTOR RECOGNISER RECOVERS:
+--------------------------------------------------------------------
+
+  For tt.load %a_ptrs:
+    AccessDescriptor(
+        base    = %a_ptr,          # base address (scalar pointer)
+        sizes   = [64, 32],        # tile is 64 rows x 32 cols
+        strides = [sam, sak],      # row stride=sam, col stride=sak
+        offsets = [pid_m*64, 0],   # tile origin in the full matrix
+        dtype   = f32,
+        loop_carried  = True,
+        increment_per_iter = sak*32  # pointer advances by this each K-step
+    )
+
+  For tt.load %b_ptrs:
+    AccessDescriptor(
+        base    = %b_ptr,
+        sizes   = [32, 64],
+        strides = [sbk, sbn],
+        offsets = [0, pid_n*64],
+        dtype   = f32,
+        loop_carried  = True,
+        increment_per_iter = sbk*32
+    )
+
+  Key insight:
+    The descriptor already encodes "advance by sak*32 each iteration".
+    The hardware DMA reads that from the descriptor fields.
+    So the 6 pointer-arithmetic ops + 2 iter_args become DEAD CODE.
+
+
+--------------------------------------------------------------------
+  THE AFTER (elided — what is actually compiled):
+  Loop carries only 1 value: (%acc)
+--------------------------------------------------------------------
+
+  %a_tile  = LOAD  descriptor_A   -- DMA reads the whole 64x32 tile
+  %b_tile  = LOAD  descriptor_B   -- DMA reads the whole 32x64 tile
+  %acc_new = DOT   %a_tile, %b_tile, %acc
+
+  scf.yield %acc_new              -- loop carries ONLY the accumulator
+
+
+  Result:
+    - Loop iter_args: 3  →  1   (only the accumulator survives)
+    - Instructions per loop iteration: 9  →  3
+    - This is why the compiled program is so compact.
+
+  Safety check (tests/test_address_subsumption.py):
+    If a pointer is also USED AS DATA (not just for address computation),
+    it is NOT elided — the value is kept. This is tested with a mutation
+    check to prove the test would catch a bug.
+

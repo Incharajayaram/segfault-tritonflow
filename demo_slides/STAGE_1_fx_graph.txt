@@ -1,0 +1,8 @@
+graph():
+    %x : [num_users=1] = placeholder[target=x]
+    %weight : [num_users=1] = get_attr[target=weight]
+    %matmul : [num_users=1] = call_function[target=operator.matmul](args = (%x, %weight), kwargs = {})
+    %bias : [num_users=1] = get_attr[target=bias]
+    %add : [num_users=1] = call_function[target=operator.add](args = (%matmul, %bias), kwargs = {})
+    %relu : [num_users=1] = call_function[target=torch.relu](args = (%add,), kwargs = {})
+    return relu
