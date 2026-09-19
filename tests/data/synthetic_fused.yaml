@@ -1,0 +1,133 @@
+schema_version: 1
+name: synthetic_fused
+description: >
+  A SYNTHETIC TEST TARGET. Not a real chip, not shipped in
+  src/tritonflow/isa/schemas/, and never loaded by the compiler. It exists only
+  to exercise equality-saturation selection on a cost structure that the three
+  real schemas do not have.
+
+  The three shipped schemas give every elementwise instruction the same flat
+  per-element cost and provide a 1:1 instruction for every TTIR operation the
+  fixtures use, so no rewrite can lower the cost and the e-graph provably ties
+  greedy on all of them. This target differs in the two ways that make rewriting
+  pay, and those two differences are the whole point of the file:
+
+    1. It has RELU, which the IR never names: Triton emits relu as
+       `arith.maxnumf(x, 0)`. Reaching SYN_RELU requires a rewrite, and it is
+       cheaper here than SYN_MAX against a materialised zero.
+    2. It has no SUB at all. Lowering `a - b` requires rewriting it to
+       `add(a, neg(b))`; greedy cannot lower it and must refuse.
+
+  There is deliberately no fused multiply-add: the project's semantics parser
+  has no three-operand form, and declaring an instruction whose semantics the
+  parser cannot express would make the schema a fiction rather than a test.
+
+  Every cost below is invented for this test and means nothing outside it.
+
+data_model:
+  memory_spaces:
+    - name: global
+      kind: flat
+      dtype: f32
+      alignment_words: 4
+  tile_dims: [BM, BN, BK]
+  max_dims: 4
+
+instructions:
+  - name: SYN_LD1D
+    kind: memory
+    rule: memory
+    addressing: {form: strided, fields: [base, sizes, strides, offsets]}
+    time: {expr: "words / 1.0", unit: word}
+    cost: {expr: "1.00 * words", unit: word}
+    constraint: "in_bounds(base, length)"
+    semantics: "dst[0:length] = mem[base + i]"
+
+  - name: SYN_LD2D
+    kind: memory
+    rule: memory
+    addressing: {form: tiled_2d, fields: [base, sizes, strides, offsets]}
+    time: {expr: "words / 1.6", unit: word}
+    cost: {expr: "0.60 * words", unit: word}
+    constraint: "in_bounds(base, length)"
+    semantics: "dst[0:length] = mem[base + i]"
+
+  - name: SYN_MAC8
+    kind: compute
+    rule: mac
+    tile: {m: 8, n: 8}
+    addressing: {form: register}
+    computation_attrs: [tile_shape, dtype, accumulate]
+    accumulate: {precision: f32, reduce_dim: k, order: k_major_sequential}
+    time: {expr: "1.0 * m * n * k / (8*8)", unit: cycle}
+    cost: {expr: "1.00 * m * n * k / (8*8)", unit: mac}
+    constraint: "all_of(aligned(a_base, 4), aligned(b_base, 4))"
+    semantics: "acc[m,n] += sum_k a[m,k] * b[k,n]"
+
+  - name: SYN_MAC16
+    kind: compute
+    rule: mac
+    tile: {m: 16, n: 16}
+    addressing: {form: register}
+    computation_attrs: [tile_shape, dtype, accumulate]
+    accumulate: {precision: f32, reduce_dim: k, order: k_major_sequential}
+    time: {expr: "1.0 * m * n * k / (16*16)", unit: cycle}
+    cost: {expr: "0.20 * m * n * k / (16*16)", unit: mac}
+    constraint: "all_of(aligned(a_base, 4), aligned(b_base, 4))"
+    semantics: "acc[m,n] += sum_k a[m,k] * b[k,n]"
+
+  - name: SYN_ADD
+    kind: compute
+    rule: elementwise
+    op: [addf, addi]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "1.00 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = src0[i] + src1[i]"
+
+  - name: SYN_MUL
+    kind: compute
+    rule: elementwise
+    op: [mulf, muli]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "1.00 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = src0[i] * src1[i]"
+
+  # Cheaper than SYN_MAX against a materialised zero. The IR never emits a
+  # `relu` op, so only a rewrite of max(x, 0) can reach this instruction.
+  - name: SYN_RELU
+    kind: compute
+    rule: elementwise
+    op: [relu]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.50 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = max(src[i], 0)"
+
+  - name: SYN_MAX
+    kind: compute
+    rule: elementwise
+    op: [maxnumf, maxsi, maxui]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "2.00 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = max(src0[i], src1[i])"
+
+  - name: SYN_NEG
+    kind: compute
+    rule: elementwise
+    op: [negf]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.25 * elements", unit: element}
+    constraint: "all_of(acc_dtype == op_dtype, in_bounds(base, length))"
+    semantics: "dst[i] = -src[i]"
+
+  - name: SYN_MOVI
+    kind: compute
+    rule: elementwise
+    op: [constant]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.10 * elements", unit: element}
+    constraint: "in_bounds(base, length)"
+    semantics: "dst[0:length] = value"
