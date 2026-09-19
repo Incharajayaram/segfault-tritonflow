@@ -66,7 +66,7 @@ __all__ = [
 DEFAULT_TILE = (64, 64, 32)
 
 #: Torch-level op names the extractor can produce TTIR for.
-ELEMENTWISE_OPS = frozenset({"add", "sub", "mul", "div", "relu", "neg"})
+ELEMENTWISE_OPS = frozenset({"add", "sub", "mul", "div", "relu", "neg", "abs", "clamp"})
 _MATMUL_OPS = frozenset({"mm", "matmul", "linear", "addmm"})
 SUPPORTED_OPS = frozenset(_MATMUL_OPS | ELEMENTWISE_OPS)
 
@@ -285,11 +285,32 @@ def _build_kernels() -> dict[str, Any]:
         x = tl.load(x_ptr + offs, mask=mask)
         tl.store(out_ptr + offs, -x, mask=mask)
 
+    @triton.jit
+    def _abs_kernel(x_ptr, out_ptr, n, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        mask = offs < n
+        x = tl.load(x_ptr + offs, mask=mask)
+        tl.store(out_ptr + offs, tl.abs(x), mask=mask)
+
+    @triton.jit
+    def _clamp_kernel(x_ptr, min_ptr, max_ptr, out_ptr, n, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        mask = offs < n
+        x = tl.load(x_ptr + offs, mask=mask)
+        lo = tl.load(min_ptr + offs, mask=mask)
+        hi = tl.load(max_ptr + offs, mask=mask)
+        res = tl.minimum(tl.maximum(x, lo), hi)
+        tl.store(out_ptr + offs, res, mask=mask)
+
     kernels: dict[str, Any] = {
         "matmul": _matmul_kernel,
         "linear": _linear_kernel,
         "relu": _relu_kernel,
         "neg": _neg_kernel,
+        "abs": _abs_kernel,
+        "clamp": _clamp_kernel,
         "bin_add": _add_kernel,
         "bin_sub": _sub_kernel,
         "bin_mul": _mul_kernel,
@@ -595,8 +616,11 @@ def extract_elementwise(op: str, n: int, *, block: int = 64) -> Extracted:
     if n <= 0:
         raise ExtractionError(f"elementwise lane count must be positive, got {n}")
     padded = _round_up(n, block)
-    if op in ("relu", "neg"):
+    if op in ("relu", "neg", "abs"):
         signature = {"x_ptr": "*fp32", "out_ptr": "*fp32", "n": "i32"}
+        kind = op
+    elif op == "clamp":
+        signature = {"x_ptr": "*fp32", "min_ptr": "*fp32", "max_ptr": "*fp32", "out_ptr": "*fp32", "n": "i32"}
         kind = op
     else:
         signature = {"x_ptr": "*fp32", "y_ptr": "*fp32", "out_ptr": "*fp32", "n": "i32"}

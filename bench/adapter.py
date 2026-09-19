@@ -4,11 +4,11 @@
 a `RunContext`. That keeps the protocol in one file and lets every track land
 its part without editing the runner.
 
-Track D owns this file. Until the pipeline exists, `lower_fixture` returns
-`None`, every row is recorded as `unavailable`, and `bench/results.json` is
-still a valid artifact with all rows present and a reason for each.
+`lower_fixture` runs the real pipeline (`tritonflow.pipeline`). A metric that cannot be
+grounded is recorded as `unavailable` with a reason, so `bench/results.json` always has
+every row.
 
-DETERMINISM CONTRACT (see docs/team/testing-ci.md S7):
+DETERMINISM CONTRACT:
   * inputs come from `make_inputs`, never from a bare `np.random` call
   * the seed is the one in bench/cases.yaml
   * no GPU, no network, no environment-dependent behaviour
@@ -20,8 +20,6 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
-import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT / "src") not in sys.path:
@@ -53,22 +51,31 @@ class RunContext:
     schema: str | None = None
 
 
-def make_inputs(tier: str, seed: int = SEED) -> dict[str, np.ndarray]:
-    """Deterministic inputs per tier. Shapes match the frozen fixtures' blocks."""
-    rng = np.random.default_rng(seed)
-    shapes = {
-        "t0_vecadd": {"x": (1024,), "y": (1024,)},
-        "t1_matmul": {"a": (64, 32), "b": (32, 64)},
-        "t2_matmul_relu": {"a": (64, 32), "b": (32, 64)},
-        "t3_modulo": {"x": (1024,), "y": (1024,)},
-    }[tier]
-    return {k: rng.standard_normal(s, dtype=np.float32) for k, s in shapes.items()}
+def lower_fixture(tier: str, isa_name: str = "tritonflow1") -> RunContext | None:
+    """Run the real pipeline on one frozen fixture. Exceptions propagate to the runner.
 
+    `reference_cost` and `oracle_cost` are left `None`: there is no hand-written
+    reference program and no exhaustive enumerator behind this function, so the two
+    cost-ratio metrics report `unavailable` instead of a made-up denominator.
+    """
+    from tritonflow.pipeline import check_parity, compile_fixture
 
-def lower_fixture(tier: str) -> RunContext | None:
-    """Run the real pipeline on one frozen fixture."""
-    try:
-        from tritonflow.lower import lower_fixture as _lower
-        return _lower(tier)
-    except Exception:
-        return None
+    result = compile_fixture(tier, isa_name)
+    ctx = RunContext(
+        tier=tier,
+        module=result.module,
+        program=result.program,
+        unsupported=list(result.unsupported),
+        total_cost=result.total_cost,
+        value_ops=result.value_ops,
+        annotated_value_ops=result.annotated_value_ops,
+        largest_subgraph_ops=result.annotated_value_ops,
+        emitted_instructions=result.emitted_instructions,
+        raw_op_count=result.raw_op_count,
+        schema=isa_name,
+    )
+    parity = check_parity(result, seed=SEED)
+    ctx.__dict__["parity_max_rel_err"] = parity.max_rel_err
+    ctx.__dict__["parity_reason"] = parity.reason
+    ctx.__dict__["parity_bound"] = parity.bound
+    return ctx

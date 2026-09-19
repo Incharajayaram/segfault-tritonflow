@@ -23,6 +23,11 @@ statistic: median
 # comparable.
 allow_gpu: false
 
+isas:
+  - tritonflow1
+  - tritonflow2
+  - vortex_rvgpu
+
 tiers:
   - t0_vecadd
   - t1_matmul
@@ -65,6 +70,7 @@ metrics:
   - id: generation_ns
     unit: ns
     headline: true
+    volatile: true   # wall-clock: written to bench/timings.json, never to the diffed results
     statistic: median
     formula: "median of 5 perf_counter_ns measurements, warm-up discarded"
 

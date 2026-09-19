@@ -42,6 +42,8 @@ def main() -> int:
         if r.get("upper_bound"):
             metric += " *(upper bound)*"
         note = r.get("reason") or r.get("formula", "")
+        if "cost" in r.get("metric", ""):
+            note += " [modelled cost (uncalibrated) — not comparable across targets]"
         print(f"| `{r['tier']}` | {metric} | {fmt(r['value'], r['unit'])} | {r['status']} | {note} |")
     missing = [r["id"] for r in data["results"] if r["status"] != "ok"]
     if missing:

@@ -8,6 +8,7 @@ so rather than pretend it extracted something.
 
 from __future__ import annotations
 
+from .aot import AotResult, StageOutcome, compile_aot
 from .dynamic_extract import (
     DEFAULT_TILE,
     ELEMENTWISE_OPS,
@@ -34,13 +35,16 @@ __all__ = [
     "DEFAULT_TILE",
     "ELEMENTWISE_OPS",
     "SUPPORTED_OPS",
+    "AotResult",
     "Capability",
     "CompileRecord",
     "CompileSpy",
     "Extracted",
     "ExtractionError",
     "ExtractionUnavailable",
+    "StageOutcome",
     "capability",
+    "compile_aot",
     "compile_triton_kernel",
     "extract_elementwise",
     "extract_for_op",
