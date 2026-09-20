@@ -312,4 +312,4 @@ python3 tools/mutation_harness.py
 
 ## License
 
-This project is open-source research code developed for the IICT CompilerTech Hackathon 2026.
+This project is open-source software licensed under the [MIT License](LICENSE).
