@@ -1,0 +1,11 @@
+=== GEMM 128x128x64 Numerical Verification Results ===
+Parity Status: PASS | Max Rel Error: 3.450e-04 (Bound: 6.250e-02)
+
+Coordinate (00, 00): ISA=-2.299041, Ref=-2.299035, AbsDiff=5.72e-06
+Coordinate (00, 01): ISA=5.933409, Ref=5.930892, AbsDiff=2.52e-03
+Coordinate (00, 02): ISA=21.190165, Ref=21.191692, AbsDiff=1.53e-03
+Coordinate (00, 03): ISA=-10.006711, Ref=-10.004903, AbsDiff=1.81e-03
+Coordinate (01, 00): ISA=-4.877642, Ref=-4.878717, AbsDiff=1.07e-03
+Coordinate (01, 01): ISA=-7.048223, Ref=-7.045957, AbsDiff=2.27e-03
+Coordinate (32, 32): ISA=-17.226273, Ref=-17.224911, AbsDiff=1.36e-03
+Coordinate (63, 63): ISA=12.916224, Ref=12.917569, AbsDiff=1.35e-03

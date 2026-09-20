@@ -1,0 +1,7 @@
+Indexed SSA Values : 77
+Tracked Consumers  : 72
+Hardware Idioms    : 1 match(es) (Tiled GEMM MAC: (64, 64, 32))
+Recovered 2D Memory Access Descriptors:
+  [0] tt.load : base=%a_ptr   shape=(64, 32)     strides=(SymExpr(%sam), SymExpr(%sak))
+  [1] tt.load : base=%b_ptr   shape=(32, 64)     strides=(SymExpr(%sbk), SymExpr(%sbn))
+  [2] tt.store: base=%c_ptr   shape=(64, 64)     strides=(SymExpr(%scm), SymExpr(%scn))

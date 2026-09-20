@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shallow-clone reference repositories for the SegFault project.
+# Shallow-clone reference repositories for the TritonFlow project.
 set -u
 cd "$(dirname "$0")"
 

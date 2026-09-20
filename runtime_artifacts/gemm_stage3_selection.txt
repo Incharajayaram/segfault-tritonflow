@@ -1,0 +1,3 @@
+ISA: tritonflow1 | Cost: 8961.4 cycles | Units: MAC16, DMA1D
+ISA: tritonflow2 | Cost: 7034.8 cycles | Units: OPU32, LDG
+ISA: vortex_rvgpu | Cost: 6185.2 cycles | Units: TCU_WGMMA32, LDG

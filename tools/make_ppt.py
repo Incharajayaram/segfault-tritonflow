@@ -181,7 +181,7 @@ def slide_title(prs):
         textbox(s, label, lx, Inches(6.0), Inches(2.8), Inches(0.4),
                 font_size=Pt(11), colour=GREY, align=PP_ALIGN.CENTER)
 
-    textbox(s, "IICT CompilerTech Hackathon 2026  ·  Team segfault",
+    textbox(s, "IICT CompilerTech Hackathon 2026  ·  Team TritonFlow",
             Inches(0), Inches(7.05), W, Inches(0.35),
             font_size=Pt(11), colour=GREY, align=PP_ALIGN.CENTER)
 
@@ -835,7 +835,7 @@ def slide_closing(prs):
         textbox(s, link, Inches(2.0), Inches(4.4 + i * 0.6), Inches(9.0), Inches(0.52),
                 font_size=Pt(15), colour=GREEN, align=PP_ALIGN.CENTER)
 
-    textbox(s, "IICT CompilerTech Hackathon 2026  ·  Team segfault",
+    textbox(s, "IICT CompilerTech Hackathon 2026  ·  Team TritonFlow",
             Inches(0), Inches(7.05), W, Inches(0.35),
             font_size=Pt(11), colour=GREY, align=PP_ALIGN.CENTER)
 

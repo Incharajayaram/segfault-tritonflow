@@ -17,7 +17,7 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from rich.columns import Columns
@@ -29,7 +29,7 @@ from rich.table import Table
 from rich.text import Text
 
 from tritonflow.emit.assemble import assemble
-from tritonflow.extract.dynamic_extract import extract_matmul
+from tritonflow.extract.dynamic_extract import Extracted
 from tritonflow.idioms.detect import annotate
 from tritonflow.isa.schema import load_builtin
 from tritonflow.ttir.graph import build_def_use
@@ -51,13 +51,13 @@ def pause(auto: bool, duration: float = 0.5, msg: str = "Press ENTER to continue
 
 def print_banner():
     banner = """
-  ███████╗███████╗ ██████╗ ███████╗ █████╗ ██╗   ██╗██╗  ████████╗
-  ██╔════╝██╔════╝██╔════╝ ██╔════╝██╔══██╗██║   ██║██║  ╚══██╔══╝
-  ███████╗█████╗  ██║  ███╗█████╗  ███████║██║   ██║██║     ██║   
-  ╚════██║██╔══╝  ██║   ██║██╔══╝  ██╔══██║██║   ██║██║     ██║   
-  ███████║███████╗╚██████╔╝██║     ██║  ██║╚██████╔╝███████╗██║   
-  ╚══════╝╚══════╝ ╚═════╝ ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝   
-      COMPILER LOWERING, IR TRANSFORMATION & ISA DIFF SHOWCASE
+  ████████╗██████╗ ██╗████████╗ ██████╗ ███╗   ██╗███████╗██╗      ██████╗ ██╗    ██╗
+  ╚══██╔══╝██╔══██╗██║╚══██╔══╝██╔═══██╗████╗  ██║██╔════╝██║     ██╔═══██╗██║    ██║
+     ██║   ██████╔╝██║   ██║   ██║   ██║██╔██╗ ██║█████╗  ██║     ██║   ██║██║ █╗ ██║
+     ██║   ██╔══██╗██║   ██║   ██║   ██║██║╚██╗██║██╔══╝  ██║     ██║   ██║██║███╗██║
+     ██║   ██║  ██║██║   ██║   ╚██████╔╝██║ ╚████║██║     ███████╗╚██████╔╝╚███╔███╔╝
+     ╚═╝   ╚═╝  ╚═╝╚═╝   ╚═╝    ╚═════╝ ╚═╝  ╚═══╝╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝ 
+              COMPILER LOWERING, IR TRANSFORMATION & ISA DIFF SHOWCASE
     """
     console.print(Panel(Text(banner, style="bold cyan"), subtitle="[dim]PyTorch → TTIR → Pre-ISA Canonical IR → Target ISAs[/dim]", border_style="cyan"))
 
@@ -216,11 +216,16 @@ def stage_3_lowering_diff(ext, res, graph, ann):
         else:
             ttir_desc = src_op
 
+        def _fmt(inst):
+            n = getattr(inst, 'name', getattr(inst, 'opcode', 'UNSUPPORTED'))
+            c = getattr(inst, 'cost', 0.0)
+            return f"{n:<12} ({c:.1f}c)"
+
         diff_table.add_row(
             ttir_desc,
-            f"{t1_inst.name:<12} ({t1_inst.cost:.1f}c)",
-            f"{t2_inst.name:<12} ({t2_inst.cost:.1f}c)",
-            f"{vx_inst.name:<14} ({vx_inst.cost:.1f}c)",
+            _fmt(t1_inst),
+            _fmt(t2_inst),
+            _fmt(vx_inst),
         )
 
     console.print(diff_table)
@@ -331,7 +336,8 @@ def stage_5_instruction_selection_audit(ext, res, graph, ann):
 
 def main():
     parser = argparse.ArgumentParser(description="Compiler Lowering, IR Transformation & ISA Diff Showcase")
-    parser.add_argument("--m", type=int, default=64, help="Matrix M dimension")
+    parser.add_argument("--fixture", type=str, default="t1_matmul", choices=["t0_vecadd", "t1_matmul", "t2_matmul_relu"], help="Canonical fixture to inspect")
+    parser.add_argument("--m", type=int, default=128, help="Matrix M dimension")
     parser.add_argument("--k", type=int, default=32, help="Matrix K dimension")
     parser.add_argument("--n", type=int, default=64, help="Matrix N dimension")
     parser.add_argument("--auto", action="store_true", help="Run automatically without pausing between stages")
@@ -342,8 +348,22 @@ def main():
     console.print(f"[bold]Target Computation:[/bold] [green]torch.matmul(({args.m}, {args.k}), ({args.k}, {args.n}))[/green]\n")
 
     # Extract
-    with console.status("[bold cyan]Extracting Triton-IR and building intermediate representation...[/bold cyan]"):
-        ext = extract_matmul(args.m, args.n, args.k)
+    with console.status("[bold cyan]Loading TTIR fixture and building intermediate representation...[/bold cyan]"):
+        fixture_path = ROOT / "fixtures" / f"{args.fixture}.ttir"
+        if not fixture_path.exists():
+            fixture_path = ROOT / "fixtures" / "t1_matmul.ttir"
+        ttir_text = fixture_path.read_text(encoding="utf-8")
+        ext = Extracted(
+            name=f"{args.fixture}_{args.m}x{args.n}x{args.k}",
+            kind="matmul",
+            op="matmul",
+            ttir=ttir_text,
+            env={"pid_x": 0, "pid_y": 0, "grid_x": 2, "grid_y": 2},
+            tile=(64, 64, 32),
+            problem=(args.m, args.n, args.k),
+            padded=(0, 0, 0),
+            has_bias=(args.fixture == "t2_matmul_relu")
+        )
         res = parse_module(ext.ttir)
         graph = build_def_use(res.module)
         ann = annotate(res.module, graph)
