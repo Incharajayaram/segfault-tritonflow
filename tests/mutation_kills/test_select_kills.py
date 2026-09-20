@@ -81,3 +81,11 @@ def test_an_instruction_without_parseable_semantics_is_never_admissible() -> Non
     assert isinstance(candidate, Candidate)
     assert candidate.admissible is False
     assert "unparseable semantics" in (candidate.rejected_by or "")
+
+def test_edge_npu_rejects_fp32_mac() -> None:
+    schema = load_builtin("edge_npu")
+    candidates = enumerate_candidates(schema, "mac", _descriptor((8, 8)), (8, 8, 8), {"words": 64})
+    # _descriptor creates an f32 descriptor, so dtype_bits=32
+    assert all(c.admissible is False for c in candidates)
+    for c in candidates:
+        assert "dtype_bits == 8" in (c.rejected_by or "")

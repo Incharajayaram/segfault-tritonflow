@@ -39,6 +39,7 @@ ISAS = [
     ("tritonflow1", "Systolic Array", "cyan"),
     ("tritonflow2", "Banked Memory ASIC", "blue"),
     ("vortex_rvgpu", "RISC-V GPGPU", "green"),
+    ("edge_npu", "Edge NPU (Integer)", "magenta"),
 ]
 
 # Known defects that change the display, kept honest instead of hidden.
@@ -159,7 +160,11 @@ def stage_3_selection(results, key_order, cells):
             if inst is None:
                 cells_row.append("[dim]—[/dim]")
                 continue
-            cost_text = f"{inst.cost:.1f}"
+            if hasattr(inst, "cost"):
+                cost_text = f"{inst.cost:.1f}"
+            else:
+                cost_text = "[red]refused[/red]"
+                inst = type("Dummy", (), {"name": "UNSUPPORTED"})()
             if name == "tritonflow2" and op == "tt.store" and TRITONFLOW2_STORE_PENDING_FIX:
                 cost_text = "[dim]pend fix[/dim]"
             shown = f"{inst.name}\n[dim]{cost_text} cost[/dim]"

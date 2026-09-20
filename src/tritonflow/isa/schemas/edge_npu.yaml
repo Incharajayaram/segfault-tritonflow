@@ -1,0 +1,97 @@
+schema_version: 1
+name: edge_npu
+description: >
+  Microcontroller-class Neural Processing Unit (NPU) model (e.g. ARM Ethos-U).
+  No FP32 MAC units, no local scratchpad memory (operates entirely out of unified
+  SRAM/DRAM global space), integer SIMD only.
+  Demonstrates that the compiler scale-down to embedded non-GPU targets works.
+
+data_model:
+  memory_spaces:
+    - name: global
+      kind: flat
+      dtype: i8
+      alignment_words: 16
+  tile_dims: [BM, BN, BK]
+  max_dims: 4
+
+instructions:
+  - name: NPU_DMA_1D
+    kind: memory
+    rule: memory
+    transfers: ["global>register", "register>global"]
+    addressing: {form: contiguous_1d, fields: [base, length]}
+    time: {expr: "words / 0.5", unit: word}
+    cost: {expr: "2.0 * words", unit: word}
+    constraint: "in_bounds(base, length)"
+    semantics: "dst[0:length] = src[0:length]"
+
+  - name: NPU_DMA_2D
+    kind: memory
+    rule: memory
+    transfers: ["global>register", "register>global"]
+    addressing: {form: tiled_2d, fields: [base, sizes, strides, offsets]}
+    time: {expr: "words / 0.2", unit: word}
+    cost: {expr: "5.0 * words", unit: word}
+    constraint: "all_of(shape[0] % 4 == 0, stride[0] % 4 == 0, in_bounds_all())"
+    semantics: "dst[i, 0:sizes[1]] = src[offsets[0]+i*strides[0], offsets[1]:...]"
+
+  - name: INT_MAC8
+    kind: compute
+    rule: mac
+    tile: {m: 8, n: 8}
+    addressing: {form: register}
+    computation_attrs: [tile_shape, dtype, accumulate]
+    accumulate: {precision: i32, reduce_dim: k, order: k_major_sequential}
+    time: {expr: "1.0 * m * n * k / (8*8)", unit: cycle}
+    cost: {expr: "1.00 * m * n * k / (8*8)", unit: mac}
+    constraint: "all_of(dtype_bits == 8, m % 8 == 0, n % 8 == 0)"
+    semantics: "acc[m,n] += sum_k a[m,k] * b[k,n]"
+
+  - name: INT_ADD
+    kind: compute
+    rule: elementwise
+    op: [addi]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.50 * elements", unit: element}
+    constraint: "in_bounds(base, length)"
+    semantics: "dst[i] = src0[i] + src1[i]"
+
+  - name: INT_MUL
+    kind: compute
+    rule: elementwise
+    op: [muli]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.50 * elements", unit: element}
+    constraint: "in_bounds(base, length)"
+    semantics: "dst[i] = src0[i] * src1[i]"
+
+  - name: INT_RELU
+    kind: compute
+    rule: elementwise
+    op: [maxsi, maxui]
+    addressing: {form: elementwise, fields: [base, length]}
+    cost: {expr: "0.50 * elements", unit: element}
+    constraint: "in_bounds(base, length)"
+    semantics: "dst[i] = max(src0[i], src1[i])"
+
+  - name: MOVI
+    kind: compute
+    rule: elementwise
+    op: [constant]
+    addressing: {form: register}
+    cost: {expr: "0.10 * elements", unit: element}
+    constraint: "in_bounds(base, length)"
+    semantics: "dst[0:length] = value"
+
+  - name: INT_MAC16
+    kind: compute
+    rule: mac
+    tile: {m: 16, n: 16}
+    addressing: {form: register}
+    computation_attrs: [tile_shape, dtype, accumulate]
+    accumulate: {precision: i32, reduce_dim: k, order: k_major_sequential}
+    time: {expr: "1.0 * m * n * k / (16*16)", unit: cycle}
+    cost: {expr: "0.80 * m * n * k / (16*16)", unit: mac}
+    constraint: "all_of(dtype_bits == 8, m % 16 == 0, n % 16 == 0)"
+    semantics: "acc[m,n] += sum_k a[m,k] * b[k,n]"

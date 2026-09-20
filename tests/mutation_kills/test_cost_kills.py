@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from tritonflow.isa.schema import load_builtin
 
 from tritonflow.isa import cost
 
@@ -53,3 +54,10 @@ def test_bank_conflicts_match_an_independent_model(stride: int) -> None:
 @pytest.mark.parametrize("record", ["MachineParam", "CostQuery", "CostResult"])
 def test_cost_records_are_immutable(record: str) -> None:
     assert getattr(cost, record).__dataclass_params__.frozen is True
+
+def test_edge_npu_cost_parsing() -> None:
+    schema = load_builtin("edge_npu")
+    # check that INT_MAC16 is exactly 12.8 cost (0.8 * 8*8*8 / 256 * ... wait)
+    # 0.80 * m * n * k / (16*16) -> for 16x16x16: 0.8 * 4096 / 256 = 12.8
+    mac = next(i for i in schema.instructions.values() if i.name == "INT_MAC16")
+    assert "0.80 * m * n * k" in str(mac.cost)
