@@ -1,9 +1,0 @@
---- descriptor.py
-+++ descriptor.py
-@@ -822,5 +822,5 @@
-             "so the constant factor is not separable from the strides"
-         )
--    return public(spec.offset.terms[0][0])
-+    return public(SymExpr([spec.offset.terms[0]]))
- 
- 
