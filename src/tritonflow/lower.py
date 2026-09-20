@@ -324,6 +324,8 @@ def lower_fixture(tier_or_path: str, isa_name: str = "vortex_rvgpu") -> RunConte
     emu_result = None
     exec_err = None
     rel_err = None
+    emu_out: np.ndarray | None = None
+    ref_out: np.ndarray | None = None
     try:
         emu_result = emulate(program, emu_inputs, policy=policy)
     except Exception as exc:

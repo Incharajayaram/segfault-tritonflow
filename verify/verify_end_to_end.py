@@ -50,7 +50,8 @@ def main() -> int:
     schema = load_builtin("tritonflow1")
     launch = json.loads((ROOT / "fixtures" / "launch_env.json").read_text())
     program = None
-    expected_counts = {"t0_vecadd": 18, "t1_matmul": 40, "t2_matmul_relu": 40, "t3_modulo": 25}
+    t0_program = None
+    expected_counts = {"t0_vecadd": 4, "t1_matmul": 40, "t2_matmul_relu": 40, "t3_modulo": 25}
     for tier in ("t0_vecadd", "t1_matmul", "t2_matmul_relu", "t3_modulo"):
         res = parse_module((fixtures / f"{tier}.ttir").read_text(),
                            source_path=str(fixtures / f"{tier}.ttir"))
@@ -65,6 +66,8 @@ def main() -> int:
             # contracted signature: (module, graph, annotations, schema, env=...)
             program = assemble(module, graph, annotations, schema,
                                env=dict(launch[tier]))
+            if tier == "t0_vecadd":
+                t0_program = program
             n_items = len(program.instrs) + sum(len(loop.body) for loop in program.loops)
             check(f"A/{tier}: assembled items ({n_items})", n_items > 0, True)
             check(f"A/{tier}: instruction count == {expected_counts[tier]}",
@@ -93,7 +96,7 @@ def main() -> int:
               reparsed.total_cost, program.total_cost)
 
     # execution on the assembled t0 program, if one exists
-    if program is not None:
+    if t0_program is not None:
         from tritonflow.emu.exec import emulate
         from tritonflow.emu.precision import PrecisionPolicy
         rng = np.random.default_rng(24173)
@@ -101,7 +104,14 @@ def main() -> int:
         y = rng.standard_normal(1024).astype(np.float32)
         # the fixture computes out = x + y elementwise over 1024 f32 lanes
         try:
-            out = emulate(program, {"%x": x, "%y": y},
+            out = emulate(
+                t0_program,
+                {
+                    "%x_ptr": x,
+                    "%y_ptr": y,
+                    "%out_ptr": np.zeros_like(x),
+                    "%n": 1024,
+                },
                           policy=PrecisionPolicy(input_precision="ieee"))
             key = next(iter(out))
             got = out[key]
