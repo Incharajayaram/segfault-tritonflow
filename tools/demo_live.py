@@ -148,6 +148,8 @@ def run_pipeline(tier: str = "t0_vecadd", isa_name: str = "tritonflow1", seed: i
     print(f"  ✔ Target Machine: {BOLD}{schema.name}{RESET} (version {schema.schema_version})")
     print(f"  ✔ Program Cost: {BOLD}{program.total_cost:.1f}{RESET} cycles (exhaustive enumeration)")
     print(f"  ✔ Emitted Instructions: {len(instrs)} target ops (conserving semantic operations)")
+    if program.scratch_allocation:
+        print(f"  ✔ Scratchpad Layout (CP-SAT/z3): {program.scratch_allocation}")
     for i, inst in enumerate(instrs[:6]):
         print(f"     [{i:02d}] {inst.name:<8} cost={inst.cost:<6.1f} defs={inst.defs} operands={list(inst.operands.keys())}")
     if len(instrs) > 6:

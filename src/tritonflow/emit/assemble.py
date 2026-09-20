@@ -421,7 +421,7 @@ def assemble(
             instrs.append(emitted)
 
     finished = [replace(loop, body=tuple(loop_bodies[loop.id])) for loop in loops]
-    return Program(
+    prog = Program(
         isa_name=str(getattr(schema, "name", "<hand-built>")),
         schema_version=int(getattr(schema, "schema_version", 0)),
         kernel_name=_kernel_name(module),
@@ -432,6 +432,29 @@ def assemble(
         total_cost=total_cost(finished, instrs, epilogue),
         inputs=_inputs(module),
     )
+
+    try:
+        from ..isa import memplan
+        
+        
+        try:
+            space = memplan.scratch_space(schema)
+            tiles = memplan.scratch_tiles(prog, schema, space)
+            if tiles:
+                problem = memplan.AllocationProblem(space, tiles)
+                alloc = memplan.plan(problem)
+                if not alloc.feasible:
+                    reason = alloc.reason or "infeasible scratch allocation"
+                    marker = UnsupportedMarker("memplan", "allocation", reason=reason)
+                    prog = replace(prog, unsupported=prog.unsupported + (marker,))
+                else:
+                    prog = replace(prog, scratch_allocation=alloc.offsets)
+        except memplan.CapacityUndeclared:
+            pass
+    except ImportError:
+        pass
+
+    return prog
 
 
 def total_cost(loops: list[Loop], instrs: list[Instr], epilogue: list[Instr]) -> float:

@@ -436,6 +436,7 @@ class Program:
     inputs: tuple[str, ...] = ()
     async_ops: tuple[AsyncOp, ...] = ()
     total_time_cycles: float | None = None
+    scratch_allocation: dict[str, int] = field(default_factory=dict)
     resources: object | None = None
 
     def __post_init__(self) -> None:
