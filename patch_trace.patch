@@ -1,0 +1,12 @@
+--- src/tritonflow/torch_backend/compiler.py
++++ src/tritonflow/torch_backend/compiler.py
+@@ -1742,7 +1742,9 @@
+ 
+     if not kernels:
+         # Try multi-kernel interpret path for graphs like MLP (linear->relu->linear)
+         targets = graph_targets(graph)
++        print(f"DEBUG targets: {targets} is_matmul_only: {_is_matmul_only_graph(targets)}")
+         if _is_matmul_only_graph(targets):
+             # The interpreter appends one reason per node it could not lower, so
+             # the plan reports *which* matmuls ran on the device instead of the
+             # blanket `fallbacks.clear()` that made a fully-failed graph look
