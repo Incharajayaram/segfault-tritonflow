@@ -768,6 +768,9 @@ def _scalar_or_none(value: SsaValue, walker: BoundedWalker) -> SymExpr | None:
             return None
         return _scalar_or_none(op.operands[0], walker)
     if name in ("tt.get_program_id", "tt.get_num_programs"):
+        if op.tokens and op.tokens[0] in ("x", "y", "z"):
+            prefix = "pid" if "program_id" in name else "num_programs"
+            return SymExpr.symbol(f"{prefix}_{op.tokens[0]}")
         return SymExpr.symbol(value.name)
     return None
 

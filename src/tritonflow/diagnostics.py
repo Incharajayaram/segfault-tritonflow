@@ -7,7 +7,7 @@ featuring source locations, visual caret pointers, contextual error explanations
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from typing import Any
 
 __all__ = [
@@ -18,6 +18,13 @@ __all__ = [
     "diagnose_unsupported_op",
     "format_diagnostic",
 ]
+
+
+try:
+    from enum import StrEnum
+except ImportError:  # Python 3.10 compatibility
+    class StrEnum(str, Enum):
+        pass
 
 
 class DiagnosticSeverity(StrEnum):

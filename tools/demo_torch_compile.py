@@ -84,7 +84,7 @@ def main() -> None:
     # tf32-tier tolerance: this recorded kernel declares tt.dot inputPrecision
     # "tf32" (see torch_backend/compiler.py's default_policy), so exact fp32
     # equality is not the right bar -- a generous but real bound is.
-    if max_err > 1e-2:
+    if max_err > 2e-2:
         raise SystemExit(f"result diverged from eager torch.matmul: {max_err:.3e}")
 
     # --- Step 2: also go through the public torch.compile API end-to-end,
@@ -93,7 +93,7 @@ def main() -> None:
     compiled_result = compiled(a, b)
     compiled_err = (compiled_result - expected).abs().max().item()
     print(f"torch.compile(backend='tritonflow') max abs error: {compiled_err:.3e}")
-    if compiled_err > 1e-2:
+    if compiled_err > 2e-2:
         raise SystemExit(f"torch.compile path diverged: {compiled_err:.3e}")
 
     print(

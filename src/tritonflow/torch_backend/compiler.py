@@ -1128,13 +1128,37 @@ def graph_targets(graph: Any) -> tuple[str, ...]:
     operations made every module-based graph look like it did three things when it
     did one. That single extra node kept `nn.Linear` — and therefore every MLP — on
     the eager path, and nothing anywhere said why.
+
+    For `call_module` nodes the target is a dotted module path string (e.g.
+    ``"model_0_0"``).  We resolve it to the canonical op name that
+    ``_is_matmul_only_graph`` understands so that ``nn.Sequential`` MLP graphs
+    are routed to ``_multi_kernel_interpret`` rather than the eager fallback.
     """
+    import torch.nn as _nn
+
+    _MODULE_OP_NAMES: dict[type, str] = {
+        _nn.Linear: "linear",
+        _nn.ReLU: "relu",
+        _nn.ReLU6: "relu",
+        _nn.GELU: "gelu",
+        _nn.SiLU: "silu",
+        _nn.Sigmoid: "sigmoid",
+    }
+
     names: list[str] = []
     for node in graph.graph.nodes:
         if node.op in ("placeholder", "output", "get_attr"):
             continue
-        target = node.target
-        names.append(getattr(target, "__name__", str(target)))
+        if node.op == "call_module":
+            try:
+                submod = graph.get_submodule(node.target)
+                canonical = _MODULE_OP_NAMES.get(type(submod))
+                names.append(canonical if canonical is not None else str(node.target))
+            except Exception:
+                names.append(str(node.target))
+        else:
+            target = node.target
+            names.append(getattr(target, "__name__", str(target)))
     return tuple(names)
 
 
@@ -1408,6 +1432,66 @@ def _multi_kernel_interpret(
             counters["eager"] += 1
             eager_nodes.append(target_name)
             return super().call_function(target, args, kwargs)
+
+        def call_module(self, target, args, kwargs):
+            """Intercept ``nn.Module`` call nodes from ``nn.Sequential`` exports.
+
+            Dynamo exports ``nn.Sequential`` graphs with ``call_module`` nodes
+            whose ``target`` is a dotted module-path string (e.g. ``"0"`` or
+            ``"model_0_0"``).  The parent ``Interpreter.call_module`` just
+            forwards to the submodule's ``forward`` method, which means
+            everything runs in PyTorch and nothing is lowered.  We resolve the
+            submodule and dispatch to the same lowering paths as
+            ``call_function``.
+            """
+            import torch.nn as _nn
+
+            try:
+                submod = self.module.get_submodule(target)
+            except AttributeError:
+                counters["eager"] += 1
+                eager_nodes.append(str(target))
+                return super().call_module(target, args, kwargs)
+
+            tensor_args = [a for a in args if isinstance(a, torch.Tensor)]
+
+            if isinstance(submod, _nn.Linear):
+                # nn.Linear.forward(input) → matmul + bias.
+                # args[0] is the input activation; weight/bias come from the module.
+                x_input = args[0] if args and isinstance(args[0], torch.Tensor) else None
+                if x_input is not None and x_input.dim() == 2:
+                    weight = submod.weight  # (out, in) — needs transpose for mm
+                    # _kernel_for expects (input, weight) in call-order convention
+                    # where weight.shape[0] == N (output dim).
+                    kernel = _kernel_for(x_input, weight, "linear", submod.bias is not None)
+                    if kernel is not None:
+                        call_args = [x_input, weight]
+                        if submod.bias is not None:
+                            call_args.append(submod.bias)
+                        try:
+                            result = _run_with_padding(kernel, call_args, "linear", has_relu=False)
+                            counters["lowered"] += 1
+                            return result
+                        except _REFUSALS as exc:
+                            records.append(_refusal_record(exc, (str(target),)))
+
+            elif isinstance(submod, (_nn.ReLU, _nn.ReLU6)):
+                if tensor_args and all(t.shape == tensor_args[0].shape for t in tensor_args):
+                    shapes = [tuple(t.shape) for t in tensor_args[:1]]
+                    kernels, record = _extract_dynamic("relu", shapes, False, (str(target),))
+                    if kernels:
+                        try:
+                            result = _run_with_padding(kernels[0], tensor_args[:1], "relu", False)
+                            counters["lowered"] += 1
+                            return result
+                        except _REFUSALS as exc:
+                            records.append(_refusal_record(exc, (str(target),)))
+                    elif record is not None:
+                        records.append(record)
+
+            counters["eager"] += 1
+            eager_nodes.append(str(target))
+            return super().call_module(target, args, kwargs)
 
     interp = TritonFlowInterpreter(graph)
 

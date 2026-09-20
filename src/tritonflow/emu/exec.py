@@ -258,6 +258,7 @@ class MachineState:
 
 
     def _materialize_descriptor(self, memref: "MemRef", base: int) -> np.ndarray:
+        import numpy as np
         from tritonflow.emu.exec import _descriptor_fields
         fields = _descriptor_fields(memref.access_key)
         raw_sizes = fields.get("sizes", "[]").strip("[]").strip()
@@ -278,13 +279,33 @@ class MachineState:
         strides = tuple(strides)
 
         raw_offsets = fields.get("offsets", "[]").strip("[]").strip()
+        
+        local_vars = {}
+        if len(self.grid) > 0: local_vars["pid_x"] = self.grid[0]
+        if len(self.grid) > 1: local_vars["pid_y"] = self.grid[1]
+        if len(self.grid) > 2: local_vars["pid_z"] = self.grid[2]
+        if len(self.grid) > 0: local_vars["pid"] = self.grid[0]
+        import numpy as np
+        for k, v in self.values.items():
+            if k.startswith("%"):
+                try:
+                    local_vars[k[1:]] = int(np.asarray(v).item())
+                except Exception:
+                    pass
+        
         offsets = []
         for o in (raw_offsets.split(",") if raw_offsets else []):
             o = o.strip()
+            if not o: continue
             try:
                 offsets.append(int(o))
             except ValueError:
-                offsets.append(0)
+                # evaluate symbolic offsets like 64*pid_x
+                expr = o.replace("%", "")
+                try:
+                    offsets.append(int(eval(expr, {}, local_vars)))
+                except Exception:
+                    offsets.append(0)
 
         is_loop_carried = fields.get("loop_carried", "False") == "True"
         raw_inc = fields.get("increment", "0")
@@ -294,8 +315,21 @@ class MachineState:
         except ValueError:
             if raw_inc in self.values:
                 inc = int(np.asarray(self.values[raw_inc]).item())
+            else:
+                expr = raw_inc.replace("%", "")
+                try:
+                    inc = int(eval(expr, {}, local_vars))
+                except Exception:
+                    inc = 0
                 
-        loop_offset = self.loop_iteration * inc if is_loop_carried else 0
+        # loop_offset stride lookup: stride_for_inc = strides[i] where sizes[i] == inc
+        stride_for_inc = 1
+        for i, size in enumerate(sizes):
+            if size == inc and i < len(strides):
+                stride_for_inc = strides[i]
+                break
+                
+        loop_offset = self.loop_iteration * inc * stride_for_inc if is_loop_carried else 0
 
         if not sizes:
             return np.array([base], dtype=np.int64)
@@ -309,6 +343,14 @@ class MachineState:
         return addresses
 
     def _resolve_memref(self, memref: "MemRef") -> np.ndarray:
+        # When the MemRef has no access-key (e.g. lower.py fixture path where MemRef.of()
+        # was used), resolve(SsaRef(base)) returns storages[base].base — the integer base
+        # address.  Instead of letting that fall into _materialize_descriptor (which has no
+        # size info and returns [base]), generate the full contiguous flat index range for
+        # that storage.  This fixes both the load and store paths symmetrically.
+        if memref.access_key is None and memref.base in self.storages:
+            storage = self.storages[memref.base]
+            return np.arange(storage.base, storage.end, dtype=np.int64).reshape(storage.shape)
         value = self.resolve(SsaRef(memref.base))
         arr = np.asarray(value, dtype=np.int64)
         if arr.ndim > 0:
@@ -406,8 +448,15 @@ def _sizes(key: str | None) -> tuple[int, ...]:
 
 def _declared_shape(instr: Instr) -> tuple[int, ...]:
     for operand in instr.operands.values():
-        if isinstance(operand, MemRef):
-            return _sizes(operand.access_key)
+        if isinstance(operand, MemRef) and operand.access_key is not None:
+            sizes = _sizes(operand.access_key)
+            if sizes:
+                return sizes
+    if instr.constrained_on:
+        import re
+        match = re.search(r"sizes=\[([0-9, ]+)\]", instr.constrained_on)
+        if match:
+            return tuple(int(s) for s in match.group(1).split(",") if s.strip())
     return ()
 
 
@@ -510,8 +559,21 @@ def _apply_memory(instr: Instr, state: MachineState) -> None:
         )
     if not instr.defs:
         raise UnsupportedInstruction(f"{instr.name} load defines no value to bind")
-    loaded = state.gather(state.resolve(src), _align_mask(mask, state.resolve(src)))
-    state.bind(instr.defs[0], loaded.reshape(_declared_shape(instr) or loaded.shape))
+
+    tile_shape = _declared_shape(instr)
+    indices = state.resolve(src)  # _resolve_memref handles access_key=None → full range
+    loaded = state.gather(indices, _align_mask(mask, indices))
+
+    expected = int(np.prod(tile_shape)) if tile_shape else 0
+    if tile_shape and loaded.size != expected:
+        # Fused-K: _resolve_memref returned the full storage extent (buffer.shape), but
+        # constrained_on records the per-k-iteration tile.  Bind at the actual storage shape
+        # so MAC gets e.g. (64,128) × (128,64) instead of an impossible (64,32) reshape.
+        storage = state.storages.get(src.base) if isinstance(src, MemRef) else None
+        actual_shape = storage.shape if storage is not None else (loaded.size,)
+        state.bind(instr.defs[0], loaded.reshape(actual_shape))
+    else:
+        state.bind(instr.defs[0], loaded.reshape(tile_shape or loaded.shape))
 
 
 def _align_mask(mask: np.ndarray | None, indices: Any) -> np.ndarray | None:
