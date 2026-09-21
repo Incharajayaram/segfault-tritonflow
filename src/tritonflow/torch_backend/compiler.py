@@ -24,19 +24,24 @@ which is the custom-backend sin this discipline exists to avoid.
 
 **Where the TTIR comes from, and in what order.** Read off the graph, Inductor
 produces *Python source for a Triton kernel*; the TTIR this pipeline consumes
-exists only after `triton.compile` has run. So the seam tries four sources in a
+exists only after `triton.compile` has run. So the seam tries five sources in a
 stated order and records which one answered (`CompiledKernel.provenance`):
 
 1. **`attached`** — TTIR a caller put on the graph (`extract_ttir`). The general
    hand-off, and the only source that can lower a kernel nobody here has heard of.
-2. **`dynamic`** — Path 1. Triton's own compiler is invoked at plan time for the
+2. **`inductor`** — Path 1a. Inductor is run on the FX graph (or a one-op
+   synthetic graph) under `CompileSpy`; every `triton.compiler.compile` TTIR is
+   captured and lowered by the identical pipeline. Scoped to matmul/linear/relu
+   in v1. When Inductor's CPU path never calls Triton, the spy returns nothing
+   and this stage records a note — it does not invent TTIR.
+3. **`dynamic`** — Path 1. Triton's own compiler is invoked at plan time for the
    graph's actual op and shape, GPU-free, and the TTIR it produces is lowered by
    the identical pipeline. This is extraction, not a lookup: it works for shapes
    and tile sizes nobody recorded. It needs Triton installed (the `extract`
    extra), and its absence is a `FallbackRecord` naming *why*, never a guess.
-3. **`flaggems`** — Path 2. If `flag_gems` is importable, an op it implements is
+4. **`flaggems`** — Path 2. If `flag_gems` is importable, an op it implements is
    compiled from its Triton source through the same extractor.
-4. **`recorded`** — Path 3. A frozen TTIR text in `kernels/`, the day-1 path.
+5. **`recorded`** — Path 3. A frozen TTIR text in `kernels/`, the day-1 path.
 
 Anything else is eager PyTorch with a `FallbackRecord`, which is Path 4 and the
 contract's hardest rule. `NOT_EXTRACTED` survives as the reason text for a graph
@@ -73,7 +78,9 @@ from ..extract import (
     ExtractionError,
     ExtractionUnavailable,
     extract_for_op,
+    extract_via_inductor,
     flaggems_bridge,
+    is_inductor_op,
     is_supported,
 )
 from ..extract import (
@@ -118,7 +125,13 @@ NOT_EXTRACTED = (
 #: Which source produced a lowering, in the order the seam tries them. Recorded
 #: on every `CompiledKernel` so a report can say *how* something was lowered
 #: instead of only that it was.
-EXTRACTED_PATHS: tuple[str, ...] = ("attached", "dynamic", "flaggems", "recorded")
+EXTRACTED_PATHS: tuple[str, ...] = (
+    "attached",
+    "inductor",
+    "dynamic",
+    "flaggems",
+    "recorded",
+)
 
 #: Where the recorded lowerings live. Inside the package, because a backend that
 #: reads a path in the *checkout* cannot be imported from anywhere else.
@@ -980,6 +993,46 @@ def _extents_with_bias(
     return extents
 
 
+def _extract_via_inductor(
+    op_name: str,
+    shapes: Sequence[Sequence[int]],
+    has_bias: bool,
+    nodes: tuple[str, ...],
+    *,
+    gm: Any | None = None,
+    example_inputs: Sequence[Any] | None = None,
+) -> tuple[list[CompiledKernel], FallbackRecord | None]:
+    """Path 1a: run Inductor under CompileSpy and lower captured TTIR."""
+    if not is_inductor_op(op_name):
+        return [], FallbackRecord(
+            reason=f"{op_name!r} is outside the Inductor capture op set (matmul/linear/relu)",
+            stage="inductor",
+            nodes=nodes,
+        )
+    try:
+        extracted, reason = extract_via_inductor(
+            gm, example_inputs, op_name, shapes, has_bias=has_bias
+        )
+    except Exception as exc:
+        return [], FallbackRecord(
+            reason="Inductor TTIR capture raised",
+            stage="inductor",
+            nodes=nodes,
+            detail=f"{type(exc).__name__}: {exc}",
+        )
+    if extracted is None:
+        return [], FallbackRecord(
+            reason="Inductor did not supply lowerable TTIR",
+            stage="inductor",
+            nodes=nodes,
+            detail=reason,
+        )
+    kernel, record = _lower_extracted(extracted, "inductor", nodes)
+    if kernel is None:
+        return [], record
+    return [kernel], None
+
+
 def _extract_dynamic(
     op_name: str, shapes: Sequence[Sequence[int]], has_bias: bool, nodes: tuple[str, ...]
 ) -> tuple[list[CompiledKernel], FallbackRecord | None]:
@@ -1286,12 +1339,10 @@ def plan_graph(graph: Any, example_inputs: Sequence[torch.Tensor]) -> LoweringPl
             )
             return plan
 
-    # 2. Extraction, then the FlagGems bridge. Path 1 comes first because it is
-    #    the one that works for shapes nobody recorded; Path 2 next because
-    #    FlagGems is opt-in. Both say why they could not help, and *every* reason
-    #    is kept: a reader of a fallback has to be able to tell "no kernel exists
-    #    for this op" from "Triton is not installed here", because those are
-    #    different problems with different fixes.
+    # 2. Inductor capture, then template extraction, then FlagGems. Inductor is
+    #    first among generated sources because that is the pitch hand-off
+    #    (Inductor → triton.compile → TTIR). When Inductor emits no Triton (common
+    #    on CPU-only hosts), the note explains why and the next sources run.
     attempts: list[FallbackRecord] = []
     candidate = extraction_candidate(targets, example_inputs)
     if candidate is None:
@@ -1305,7 +1356,16 @@ def plan_graph(graph: Any, example_inputs: Sequence[torch.Tensor]) -> LoweringPl
         )
     else:
         op_name, shapes, has_bias = candidate
-        for stage in (_extract_dynamic, _extract_via_flaggems):
+        stages = (
+            (
+                lambda o, s, b, n: _extract_via_inductor(
+                    o, s, b, n, gm=graph, example_inputs=example_inputs
+                )
+            ),
+            _extract_dynamic,
+            _extract_via_flaggems,
+        )
+        for stage in stages:
             kernels, record = stage(op_name, shapes, has_bias, nodes)
             if kernels:
                 # The reasons the earlier stages declined are *notes*, not
@@ -1458,16 +1518,30 @@ def _multi_kernel_interpret(
         N = int(weight.shape[0]) if target_name == "linear" else int(weight.shape[1])
         op = "linear" if target_name in ("linear", "addmm") else "mm"
         shapes = [(M, K), (K, N)]
+        attempts: list[FallbackRecord] = []
+        kernels, record = _extract_via_inductor(op, shapes, has_bias, node)
+        if kernels:
+            return kernels[0]
+        if record is not None:
+            attempts.append(record)
         for stage in (_extract_dynamic, _extract_via_flaggems):
             kernels, record = stage(op, shapes, has_bias, node)
             if kernels:
+                # Earlier-stage misses are notes on the plan, not node fallbacks:
+                # the node lowered, and a reader still needs to know inductor
+                # was tried first.
+                if plan is not None and attempts:
+                    plan.notes.extend(attempts)
                 return kernels[0]
             if record is not None:
-                records.append(record)
+                attempts.append(record)
         # The recorded lowering last, so this path still works with Triton absent.
         matches = _match_recorded_shapes(M, N, K, node)
         if matches:
+            if plan is not None and attempts:
+                plan.notes.extend(attempts)
             return matches[0]
+        records.extend(attempts)
         records.append(
             FallbackRecord(
                 reason=f"no lowering applies to the {target_name} node at {(M, K)} @ {(K, N)}",
@@ -1555,6 +1629,27 @@ def _multi_kernel_interpret(
                     )
                     if can_shape:
                         shapes = [dominant_shape for _ in converted_args]
+                        if op == "relu":
+                            kernels, record = _extract_via_inductor(
+                                op, shapes, False, (target_name,)
+                            )
+                            if kernels:
+                                try:
+                                    result = _run_with_padding(
+                                        kernels[0], converted_args, op, False
+                                    )
+                                    value, mismatch = self._shadow(
+                                        result, target, args, kwargs, None
+                                    )
+                                    if mismatch is None:
+                                        counters["lowered"] += 1
+                                        return value
+                                    _demote(target_name, mismatch)
+                                    return value
+                                except _REFUSALS as exc:
+                                    records.append(_refusal_record(exc, (target_name,)))
+                            elif record is not None and plan is not None:
+                                plan.notes.append(record)
                         kernels, record = _extract_dynamic(op, shapes, False, (target_name,))
                         if kernels:
                             try:

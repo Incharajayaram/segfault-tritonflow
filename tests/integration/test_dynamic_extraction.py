@@ -111,7 +111,11 @@ def test_matmul_lowers_dynamically_and_matches_torch(shape: tuple[int, int, int]
     a, b = torch.randn(M, K), torch.randn(K, N)
     call, result = run_backend(lambda x, y: x @ y, a, b)
     provenance = [kernel.provenance for kernel in call.tritonflow_plan.lowered]
-    assert provenance == ["dynamic"], "Path 1 must answer before the recorded fixtures"
+    assert provenance[0] in ("inductor", "dynamic"), (
+        f"generated TTIR sources must answer before recorded fixtures, got {provenance}"
+    )
+    if provenance[0] == "dynamic":
+        assert any(n.stage == "inductor" for n in call.tritonflow_plan.notes)
     assert tuple(result.shape) == (M, N)
     assert relative_error(result, a @ b) <= tf32_band(K)
 
@@ -164,17 +168,21 @@ def test_degrades_to_the_recorded_lowering_without_triton(monkeypatch: pytest.Mo
     # two causes (no Triton / no kernel for this op) have different fixes.
     notes = {note.stage: note.reason for note in call.tritonflow_plan.notes}
     assert "unavailable" in notes.get("extract", ""), notes
+    # Inductor is tried before extract; on CPU it also leaves a note.
+    assert "inductor" in notes or any(n.stage == "inductor" for n in call.tritonflow_plan.notes)
     assert call.tritonflow_plan.fallbacks == [], "nothing fell back to eager here"
     assert call.tritonflow_plan.fully_lowered is True
 
-
-def test_a_first_source_win_leaves_no_notes() -> None:
-    """When Path 1 answers, nothing was skipped, so there is nothing to note."""
+def test_a_generated_source_win_notes_only_skipped_stages() -> None:
+    """Inductor is tried first; a dynamic win must note why inductor was skipped."""
     a, b = torch.randn(128, 64), torch.randn(64, 128)
     call, _ = run_backend(lambda x, y: x @ y, a, b)
-    assert [kernel.provenance for kernel in call.tritonflow_plan.lowered] == ["dynamic"]
-    assert call.tritonflow_plan.notes == []
-
+    prov = [kernel.provenance for kernel in call.tritonflow_plan.lowered]
+    assert prov[0] in ("inductor", "dynamic"), prov
+    if prov[0] == "inductor":
+        assert call.tritonflow_plan.notes == []
+    else:
+        assert any(n.stage == "inductor" for n in call.tritonflow_plan.notes)
 
 def test_no_triton_also_records_the_bridge_reason(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
@@ -219,8 +227,8 @@ def test_eager_node_is_named_and_not_hidden() -> None:
     reasons = " ".join(record.reason for record in call.tritonflow_plan.fallbacks)
     assert "relu" not in reasons  # nothing here is a relu; a wrong name is a wrong record
     assert "softmax" in reasons or eager
-    assert relative_error(result, fn(x)) <= 1e-5
-
+    # Matmul may lower under tf32 while softmax runs eager on that result.
+    assert relative_error(result, fn(x)) <= tf32_band(16)
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float64, torch.int32])
 def test_undeclared_input_dtype_falls_back_instead_of_raising(dtype: torch.dtype) -> None:
@@ -259,7 +267,8 @@ def test_tf32_declared_precision_survives_a_rounded_dtype_band() -> None:
     """The f32 path still lowers; the dtype fix must not have widened it to "anything"."""
     a, b = torch.randn(48, 32), torch.randn(32, 48)
     call, result = run_backend(lambda p, q: p @ q, a, b)
-    assert [k.provenance for k in call.tritonflow_plan.lowered] == ["dynamic"]
+    assert call.tritonflow_plan.lowered
+    assert call.tritonflow_plan.lowered[0].provenance in ("inductor", "dynamic")
     assert call.tritonflow_plan.fallbacks == []
     assert relative_error(result, a @ b) <= tf32_band(32)
 
@@ -269,5 +278,5 @@ def test_plan_json_reports_provenance_and_counters() -> None:
     call, _ = run_backend(lambda p, q: p * q, x, y)
     payload = call.tritonflow_plan.to_json()
     assert payload["fully_lowered"] is True
-    assert payload["provenance"] == ["dynamic"]
+    assert payload["provenance"] == ["dynamic"]  # mul is outside inductor v1 op set
     assert payload["node_lowerings"] == 0

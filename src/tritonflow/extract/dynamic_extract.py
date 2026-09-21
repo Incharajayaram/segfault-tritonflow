@@ -395,32 +395,42 @@ class CompileRecord:
 class CompileSpy:
     """Observe ``triton.compiler.compile`` for the duration of a ``with`` block.
 
-    Wraps the *module attribute* and restores it on exit. An alias bound by
+    Wraps the *module attribute* on both ``triton.compiler`` and ``triton``
+    (Inductor calls ``triton.compile``, which is normally the same function but
+    a separate module attribute). Restores both on exit. An alias bound by
     ``from triton.compiler import compile`` **before** the block started keeps
     pointing at the original function and therefore stays invisible; the raw
-    module attribute is the only place this can honestly sit without reaching
+    module attributes are the only place this can honestly sit without reaching
     into bytecode.
     """
 
     def __init__(self) -> None:
         self.records: list[CompileRecord] = []
         self.errors: list[str] = []
-        self._module: Any = None
-        self._original: Any = None
+        self._bindings: list[tuple[Any, str, Any]] = []
 
     def __enter__(self) -> CompileSpy:
+        modules: list[Any] = []
         try:
             import triton.compiler as tc
+
+            modules.append(tc)
         except Exception as exc:
             self.errors.append(f"triton.compiler is not importable: {exc}")
             return self
-        self._module = tc
-        self._original = getattr(tc, "compile", None)
-        if self._original is None:  # pragma: no cover - a Triton that moved its entry point
-            self.errors.append("triton.compiler has no 'compile' attribute to wrap")
+        try:
+            import triton as triton_mod
+
+            modules.append(triton_mod)
+        except Exception as exc:
+            self.errors.append(f"triton is not importable: {exc}")
+
+        original = getattr(modules[0], "compile", None)
+        if original is None or not callable(original):  # pragma: no cover
+            self.errors.append("triton.compiler has no callable 'compile' to wrap")
             return self
+
         spy = self
-        original = self._original
 
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             compiled = original(*args, **kwargs)
@@ -442,12 +452,16 @@ class CompileSpy:
                 spy.errors.append(f"could not record a compilation: {type(exc).__name__}: {exc}")
             return compiled
 
-        tc.compile = wrapper
+        for mod in modules:
+            if getattr(mod, "compile", None) is not None:
+                self._bindings.append((mod, "compile", getattr(mod, "compile")))
+                setattr(mod, "compile", wrapper)
         return self
 
     def __exit__(self, *exc_info: Any) -> bool:
-        if self._module is not None and self._original is not None:
-            self._module.compile = self._original
+        for mod, name, original in self._bindings:
+            setattr(mod, name, original)
+        self._bindings.clear()
         return False
 
 
