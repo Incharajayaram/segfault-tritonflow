@@ -1,13 +1,13 @@
 === MLP Actual Output Numbers ===
-Sample 0, Feature 0: Compiled=-2.557819, Ref=-2.601214, Diff=4.34e-02
-Sample 0, Feature 1: Compiled=55.603142, Ref=55.609341, Diff=6.20e-03
-Sample 0, Feature 2: Compiled=42.721252, Ref=42.736248, Diff=1.50e-02
-Sample 1, Feature 0: Compiled=2.104941, Ref=2.107356, Diff=2.41e-03
-Sample 1, Feature 1: Compiled=2.296437, Ref=2.300818, Diff=4.38e-03
-Sample 1, Feature 2: Compiled=10.272174, Ref=10.285423, Diff=1.32e-02
-Sample 2, Feature 0: Compiled=-14.184219, Ref=-14.188265, Diff=4.05e-03
-Sample 2, Feature 1: Compiled=55.220703, Ref=55.210949, Diff=9.75e-03
-Sample 2, Feature 2: Compiled=34.163689, Ref=34.165997, Diff=2.31e-03
-Sample 3, Feature 0: Compiled=4.547169, Ref=4.545890, Diff=1.28e-03
-Sample 3, Feature 1: Compiled=20.634125, Ref=20.620256, Diff=1.39e-02
-Sample 3, Feature 2: Compiled=42.295906, Ref=42.293079, Diff=2.83e-03
+Sample 0, Feature 0: Compiled=-2.692028, Ref=-2.694041, Diff=2.01e-03
+Sample 0, Feature 1: Compiled=37.869137, Ref=37.855915, Diff=1.32e-02
+Sample 0, Feature 2: Compiled=-3.753944, Ref=-3.756946, Diff=3.00e-03
+Sample 1, Feature 0: Compiled=-24.127258, Ref=-24.125565, Diff=1.69e-03
+Sample 1, Feature 1: Compiled=29.168036, Ref=29.167070, Diff=9.65e-04
+Sample 1, Feature 2: Compiled=-12.551560, Ref=-12.550654, Diff=9.06e-04
+Sample 2, Feature 0: Compiled=8.053448, Ref=8.050023, Diff=3.42e-03
+Sample 2, Feature 1: Compiled=-1.925072, Ref=-1.945535, Diff=2.05e-02
+Sample 2, Feature 2: Compiled=29.873428, Ref=29.863600, Diff=9.83e-03
+Sample 3, Feature 0: Compiled=15.364353, Ref=15.382379, Diff=1.80e-02
+Sample 3, Feature 1: Compiled=-13.634974, Ref=-13.640230, Diff=5.26e-03
+Sample 3, Feature 2: Compiled=63.178211, Ref=63.176788, Diff=1.42e-03
